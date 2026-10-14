@@ -1,0 +1,118 @@
+networks:
+  bridgenet:
+    driver: bridge
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    ports:
+      - "127.0.0.1:5432:5432"
+    restart: unless-stopped
+    environment:
+      POSTGRES_MULTIPLE_DATABASES: "synapse,mautrix_whatsapp,mautrix_signal"
+      POSTGRES_USER: bridgeadmin
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d
+    networks:
+      - bridgenet
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bridgeadmin"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  synapse:
+    image: matrixdotorg/synapse:latest
+    container_name: synapse
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SYNAPSE_SERVER_NAME: local.bridge
+      SYNAPSE_REPORT_STATS: "no"
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    secrets:
+      - registration_shared_secret
+      - macaroon_secret_key
+      - form_secret
+      - signal_registration
+      - whatsapp_registration
+    volumes:
+      - ./synapse:/data
+    networks:
+      - bridgenet
+    # Pas de port exposé publiquement ici: nginx (reverse proxy) fera le
+    # relais TLS vers ce port en interne uniquement, cf étape durcissement.
+    expose:
+      - "8008"
+    ports:
+      - "127.0.0.1:8008:8008"
+
+  mautrix-whatsapp:
+    image: dock.mau.dev/mautrix/whatsapp:latest
+    container_name: mautrix-whatsapp
+    restart: unless-stopped
+    depends_on:
+      - synapse
+    environment:
+      BRIDGE_APPSERVICE__AS_TOKEN: ${WHATSAPP_AS_TOKEN}
+      BRIDGE_APPSERVICE__HS_TOKEN: ${WHATSAPP_HS_TOKEN}
+    volumes:
+      - ./mautrix-whatsapp:/data
+    networks:
+      - bridgenet
+
+  mautrix-signal:
+    image: dock.mau.dev/mautrix/signal:latest
+    container_name: mautrix-signal
+    restart: unless-stopped
+    depends_on:
+      - synapse
+    environment:
+      BRIDGE_APPSERVICE__AS_TOKEN: ${SIGNAL_AS_TOKEN}
+      BRIDGE_APPSERVICE__HS_TOKEN: ${SIGNAL_HS_TOKEN}
+    volumes:
+      - ./mautrix-signal:/data
+    networks:
+      - bridgenet
+
+  auto-bridge-signal:
+    build: ./auto-bridge
+    container_name: auto-bridge-signal
+    restart: unless-stopped
+    depends_on:
+      - synapse
+      - mautrix-signal
+    env_file:
+      - ../.env
+    environment:
+      MATRIX_HOMESERVER_URL: http://synapse:8008
+      SYNC_TOKEN_FILE: /state/signal_next_batch
+    volumes:
+      - ../script/server:/app:ro
+      - auto_bridge_state:/state
+    networks:
+      - bridgenet
+
+volumes:
+  auto_bridge_state:
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  registration_shared_secret:
+    file: ./secrets/registration_shared_secret
+  macaroon_secret_key:
+    file: ./secrets/macaroon_secret_key
+  form_secret:
+    file: ./secrets/form_secret
+  signal_registration:
+    file: ./secrets/signal_registration
+  whatsapp_registration:
+    file: ./secrets/whatsapp_registration

@@ -1,0 +1,19 @@
+# secrets
+.env
+Docker/secrets/
+*.key
+*.key.*
+*.bak
+
+# bases de données et médias
+*.db
+*.db-wal
+*.db-shm
+*.sql
+Docker/postgres-data/
+Docker/synapse/media_store/
+
+# fichiers parasites
+Docker/-c
+Docker/-d
+__pycache__/

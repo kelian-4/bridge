@@ -1,0 +1,36 @@
+From: local-fix
+Subject: [PATCH] Do not drop media messages with an empty body
+
+mautrix-telegram's relaybot/relay message handler rejects ANY Matrix
+m.room.message event whose `content.body` is an empty string, via:
+
+    elif not content.body:
+        raise IgnoredMessageError("Message doesn't have a body")
+
+This is correct for m.text (an empty text message is meaningless),
+but it is wrong for media messages (m.image, m.audio, m.video,
+m.file, m.sticker): several bridges - notably mautrix-whatsapp -
+send `"body": ""` for media that has no caption, which is valid
+per the Matrix spec (body is optional/empty for uncaptioned media).
+
+The rejection happens before request logging/response, and is only
+logged at DEBUG level on a per-portal logger, so from the outside
+it looks like the media event vanishes silently: no error in
+Telegram, no message in the room, nothing in default INFO logs.
+
+Fix: only require a non-empty body for MessageType.TEXT. Media
+messages already have their own body/filename fallback logic
+further down in _handle_matrix_message (using content.filename
+when body is absent), so this is safe.
+
+--- a/mautrix_telegram/portal.py
++++ b/mautrix_telegram/portal.py
+@@ -2286,7 +2286,7 @@ class Portal(DBPortal, BasePortal):
+     ) -> None:
+         if not content.msgtype:
+             raise IgnoredMessageError("Message doesn't have a msgtype")
+-        elif not content.body:
++        elif not content.body and content.msgtype == MessageType.TEXT:
+             raise IgnoredMessageError("Message doesn't have a body")
+ 
+         logged_in = not await sender.needs_relaybot(self)
