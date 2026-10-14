@@ -145,6 +145,34 @@ if [ ! -f synapse/local.bridge.signing.key ]; then
     matrixdotorg/synapse:latest -m synapse.app.homeserver --config-path /data/homeserver.yaml --generate-keys
 fi
 
+PROJECT="$(basename "$PWD" | tr '[:upper:]' '[:lower:]')"
+conflicts=()
+for c in postgres synapse mautrix-signal mautrix-whatsapp auto-bridge-signal; do
+  "${DOCKER[@]}" inspect "$c" >/dev/null 2>&1 || continue
+  owner="$("${DOCKER[@]}" inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$c" 2>/dev/null || true)"
+  [ "$owner" = "$PROJECT" ] || conflicts+=("$c")
+done
+if [ "${#conflicts[@]}" -gt 0 ]; then
+  if printf '%s\n' "${conflicts[@]}" | grep -qx postgres; then
+    src="$("${DOCKER[@]}" inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Source}}{{end}}{{end}}' postgres 2>/dev/null || true)"
+    if [ "$(realpath -m "${src:-/nonexistent}")" != "$(realpath -m "$PWD/postgres-data")" ]; then
+      die "le conteneur postgres existant utilise ${src:-un volume nommé} et non $PWD/postgres-data : ta base serait ignorée. Place la base dans postgres-data, ou adapte le volume dans docker-compose.yml, puis relance"
+    fi
+  fi
+  echo "Conteneurs existants hors de ce projet : ${conflicts[*]}"
+  echo "Ils seront arrêtés et renommés en <nom>-old (rien n'est supprimé, données et volumes conservés), puis remplacés par les nouveaux qui reprennent la même base."
+  [ -t 0 ] || die "confirmation impossible sans terminal"
+  read -r -p "Continuer ? [o/N] " rep
+  case "$rep" in o|O|oui|y|Y) ;; *) die "abandon : aucun conteneur modifié";; esac
+  for c in "${conflicts[@]}"; do
+    new="$c-old"
+    "${DOCKER[@]}" inspect "$new" >/dev/null 2>&1 && new="$c-old-$(date +%s)"
+    "${DOCKER[@]}" stop "$c" >/dev/null
+    "${DOCKER[@]}" rename "$c" "$new"
+    echo "  $c -> $new (arrêté, conservé)"
+  done
+fi
+
 if git rev-parse --git-dir >/dev/null 2>&1; then
   git update-index --skip-worktree mautrix-signal/config.yaml mautrix-whatsapp/config.yaml 2>/dev/null || true
 fi
