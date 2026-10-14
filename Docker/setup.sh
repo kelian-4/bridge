@@ -70,9 +70,15 @@ fi
 is_placeholder "$(env_get MATRIX_USER_ID)" && env_set MATRIX_USER_ID "$ADMIN_MXID"
 case "$(env_get MATRIX_USER_ID)" in @user:*) env_set MATRIX_USER_ID "$ADMIN_MXID";; esac
 
+PROJECT="$(basename "$PWD" | tr '[:upper:]' '[:lower:]')"
+EXTERNAL_PG=0
+if "${DOCKER[@]}" inspect postgres >/dev/null 2>&1; then
+  pg_owner="$("${DOCKER[@]}" inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' postgres 2>/dev/null || true)"
+  [ "$pg_owner" = "$PROJECT" ] || EXTERNAL_PG=1
+fi
 PG_PW_FILE="secrets/postgres_password.txt"
 PG_EXISTS=0
-[ -d postgres-data ] && PG_EXISTS=1
+{ [ -d postgres-data ] || [ "$EXTERNAL_PG" = 1 ]; } && PG_EXISTS=1
 if is_placeholder "$(env_get POSTGRES_PASSWORD)"; then
   if [ -s "$PG_PW_FILE" ]; then
     env_set POSTGRES_PASSWORD "$(tr -d '\n' < "$PG_PW_FILE")"
@@ -99,6 +105,7 @@ export SERVER_NAME ADMIN_MXID
 
 [[ "$POSTGRES_PASSWORD" =~ ^[A-Za-z0-9_.,@+-]+$ ]] || die "POSTGRES_PASSWORD contient des caractères non pris en charge (utilise lettres, chiffres et _ . , @ + -)"
 
+if [ "$EXTERNAL_PG" = 1 ]; then env_set COMPOSE_PROFILES ""; else env_set COMPOSE_PROFILES "local-db"; fi
 ln -sfn ../.env .env
 
 mkdir -p secrets synapse mautrix-signal mautrix-whatsapp
@@ -145,20 +152,19 @@ if [ ! -f synapse/local.bridge.signing.key ]; then
     matrixdotorg/synapse:latest -m synapse.app.homeserver --config-path /data/homeserver.yaml --generate-keys
 fi
 
-PROJECT="$(basename "$PWD" | tr '[:upper:]' '[:lower:]')"
+"${DOCKER[@]}" network inspect bridgenet >/dev/null 2>&1 || "${DOCKER[@]}" network create bridgenet >/dev/null
+if [ "$EXTERNAL_PG" = 1 ]; then
+  "${DOCKER[@]}" start postgres >/dev/null 2>&1 || true
+  "${DOCKER[@]}" network connect --alias postgres bridgenet postgres >/dev/null 2>&1 || true
+  echo "Postgres existant réutilisé tel quel (aucune modification)"
+fi
 conflicts=()
-for c in postgres synapse mautrix-signal mautrix-whatsapp auto-bridge-signal; do
+for c in synapse mautrix-signal mautrix-whatsapp auto-bridge-signal; do
   "${DOCKER[@]}" inspect "$c" >/dev/null 2>&1 || continue
   owner="$("${DOCKER[@]}" inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$c" 2>/dev/null || true)"
   [ "$owner" = "$PROJECT" ] || conflicts+=("$c")
 done
 if [ "${#conflicts[@]}" -gt 0 ]; then
-  if printf '%s\n' "${conflicts[@]}" | grep -qx postgres; then
-    src="$("${DOCKER[@]}" inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Source}}{{end}}{{end}}' postgres 2>/dev/null || true)"
-    if [ "$(realpath -m "${src:-/nonexistent}")" != "$(realpath -m "$PWD/postgres-data")" ]; then
-      die "le conteneur postgres existant utilise ${src:-un volume nommé} et non $PWD/postgres-data : ta base serait ignorée. Place la base dans postgres-data, ou adapte le volume dans docker-compose.yml, puis relance"
-    fi
-  fi
   echo "Conteneurs existants hors de ce projet : ${conflicts[*]}"
   echo "Ils seront arrêtés et renommés en <nom>-old (rien n'est supprimé, données et volumes conservés), puis remplacés par les nouveaux qui reprennent la même base."
   [ -t 0 ] || die "confirmation impossible sans terminal"
