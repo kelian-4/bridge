@@ -62,7 +62,9 @@ SERVER_NAME="${SERVER_NAME:-$SERVER_NAME_DEFAULT}"
 
 ADMIN_MXID="$(env_get ADMIN_MXID)"
 if is_placeholder "$ADMIN_MXID" || [[ "$ADMIN_MXID" == @admin:* ]]; then
-  ADMIN_MXID="$(ask ADMIN_MXID "Identifiant Matrix de l'administrateur (ex. @toi:$SERVER_NAME) : " '^@[^:[:space:]]+:[^[:space:]]+$')"
+  ADMIN_MXID="$(ask ADMIN_MXID "Identifiant Matrix de l'administrateur (nom seul, ex. kelian, ou complet @kelian:$SERVER_NAME) : " '^@?[^:@[:space:]]+(:[^[:space:]]+)?$')"
+  ADMIN_MXID="@${ADMIN_MXID#@}"
+  case "$ADMIN_MXID" in *:*) ;; *) ADMIN_MXID="$ADMIN_MXID:$SERVER_NAME";; esac
   env_set ADMIN_MXID "$ADMIN_MXID"
 fi
 is_placeholder "$(env_get MATRIX_USER_ID)" && env_set MATRIX_USER_ID "$ADMIN_MXID"
