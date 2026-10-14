@@ -71,20 +71,39 @@ is_placeholder "$(env_get MATRIX_USER_ID)" && env_set MATRIX_USER_ID "$ADMIN_MXI
 case "$(env_get MATRIX_USER_ID)" in @user:*) env_set MATRIX_USER_ID "$ADMIN_MXID";; esac
 
 PROJECT="$(basename "$PWD" | tr '[:upper:]' '[:lower:]')"
-EXTERNAL_PG=0
-if "${DOCKER[@]}" inspect postgres >/dev/null 2>&1; then
-  pg_owner="$("${DOCKER[@]}" inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' postgres 2>/dev/null || true)"
-  [ "$pg_owner" = "$PROJECT" ] || EXTERNAL_PG=1
-fi
+SERVICES=(postgres synapse mautrix-signal mautrix-whatsapp auto-bridge-signal)
+profile_of() {
+  case "$1" in
+    postgres) echo local-postgres;;
+    synapse) echo local-synapse;;
+    mautrix-signal) echo local-signal;;
+    mautrix-whatsapp) echo local-whatsapp;;
+    auto-bridge-signal) echo local-auto-bridge;;
+  esac
+}
+declare -A EXT=()
+profiles=()
+for c in "${SERVICES[@]}"; do
+  EXT[$c]=0
+  if "${DOCKER[@]}" inspect "$c" >/dev/null 2>&1; then
+    owner="$("${DOCKER[@]}" inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$c" 2>/dev/null || true)"
+    [ "$owner" = "$PROJECT" ] || EXT[$c]=1
+  fi
+  [ "${EXT[$c]}" = 1 ] || profiles+=("$(profile_of "$c")")
+done
+PROFILES_VALUE="$(IFS=,; echo "${profiles[*]-}")"
+
 PG_PW_FILE="secrets/postgres_password.txt"
+NEED_PG_PW=0
+{ [ "${EXT[synapse]}" = 0 ] || [ "${EXT[postgres]}" = 0 ]; } && NEED_PG_PW=1
 PG_EXISTS=0
-{ [ -d postgres-data ] || [ "$EXTERNAL_PG" = 1 ]; } && PG_EXISTS=1
-if is_placeholder "$(env_get POSTGRES_PASSWORD)"; then
+{ [ -d postgres-data ] || [ "${EXT[postgres]}" = 1 ]; } && PG_EXISTS=1
+if [ "$NEED_PG_PW" = 1 ] && is_placeholder "$(env_get POSTGRES_PASSWORD)"; then
   if [ -s "$PG_PW_FILE" ]; then
     env_set POSTGRES_PASSWORD "$(tr -d '\n' < "$PG_PW_FILE")"
     echo "  repris: POSTGRES_PASSWORD (depuis $PG_PW_FILE)"
   elif [ "$PG_EXISTS" = 1 ]; then
-    echo "Une base Postgres existe déjà (postgres-data) : son mot de passe ne peut pas être régénéré."
+    echo "Une base Postgres existe déjà : son mot de passe ne peut pas être régénéré."
     pw="$(ask POSTGRES_PASSWORD "Mot de passe actuel du compte bridgeadmin : ")"
     env_set POSTGRES_PASSWORD "$pw"
   else
@@ -96,6 +115,7 @@ echo "Génération des secrets manquants"
 for v in REGISTRATION_SHARED_SECRET MACAROON_SECRET_KEY FORM_SECRET SIGNAL_AS_TOKEN SIGNAL_HS_TOKEN WHATSAPP_AS_TOKEN WHATSAPP_HS_TOKEN; do
   env_gen "$v"
 done
+env_set COMPOSE_PROFILES "$PROFILES_VALUE"
 
 set -a
 # shellcheck disable=SC1090
@@ -103,21 +123,33 @@ set -a
 set +a
 export SERVER_NAME ADMIN_MXID
 
-[[ "$POSTGRES_PASSWORD" =~ ^[A-Za-z0-9_.,@+-]+$ ]] || die "POSTGRES_PASSWORD contient des caractères non pris en charge (utilise lettres, chiffres et _ . , @ + -)"
+PG_PW="${POSTGRES_PASSWORD:-}"
+if [ -n "$PG_PW" ] && ! [[ "$PG_PW" =~ ^[A-Za-z0-9_.,@+-]+$ ]]; then
+  die "POSTGRES_PASSWORD contient des caractères non pris en charge (utilise lettres, chiffres et _ . , @ + -)"
+fi
 
-if [ "$EXTERNAL_PG" = 1 ]; then env_set COMPOSE_PROFILES ""; else env_set COMPOSE_PROFILES "local-db"; fi
 ln -sfn ../.env .env
-
 mkdir -p secrets synapse mautrix-signal mautrix-whatsapp
 chmod 700 secrets
-if [ -s "$PG_PW_FILE" ] && [ "$(tr -d '\n' < "$PG_PW_FILE")" != "$POSTGRES_PASSWORD" ] && [ "$PG_EXISTS" = 1 ]; then
-  die "$PG_PW_FILE diffère de POSTGRES_PASSWORD alors que postgres-data existe déjà : aligne les deux sur le mot de passe réel de la base"
-fi
 write_secret() { printf '%s' "$2" > "secrets/$1"; chmod "${3:-644}" "secrets/$1"; }
-write_secret postgres_password.txt "$POSTGRES_PASSWORD" 600
+if [ -n "$PG_PW" ]; then
+  if [ -s "$PG_PW_FILE" ] && [ "$(tr -d '\n' < "$PG_PW_FILE")" != "$PG_PW" ] && [ "$PG_EXISTS" = 1 ]; then
+    die "$PG_PW_FILE diffère de POSTGRES_PASSWORD alors qu'une base existe déjà : aligne les deux sur le mot de passe réel de la base"
+  fi
+  write_secret postgres_password.txt "$PG_PW" 600
+fi
 write_secret registration_shared_secret "$REGISTRATION_SHARED_SECRET"
 write_secret macaroon_secret_key "$MACAROON_SECRET_KEY"
 write_secret form_secret "$FORM_SECRET"
+
+"${DOCKER[@]}" network inspect bridgenet >/dev/null 2>&1 || "${DOCKER[@]}" network create bridgenet >/dev/null
+for c in "${SERVICES[@]}"; do
+  if [ "${EXT[$c]}" = 1 ]; then
+    "${DOCKER[@]}" start "$c" >/dev/null 2>&1 || true
+    "${DOCKER[@]}" network connect --alias "$c" bridgenet "$c" >/dev/null 2>&1 || true
+    echo "Existant, réutilisé tel quel (aucune modification) : $c"
+  fi
+done
 
 MYUID="$(id -u)"
 MYGID="$(id -g)"
@@ -141,51 +173,36 @@ gen_registration() {
   chmod 644 "secrets/$out"
 }
 
-gen_registration mautrix-signal mautrix-signal dock.mau.dev/mautrix/signal:latest "$SIGNAL_AS_TOKEN" "$SIGNAL_HS_TOKEN" signal_registration
-gen_registration mautrix-whatsapp mautrix-whatsapp dock.mau.dev/mautrix/whatsapp:latest "$WHATSAPP_AS_TOKEN" "$WHATSAPP_HS_TOKEN" whatsapp_registration
-
-echo "Synapse"
-[ -f synapse/homeserver.yaml ] || die "synapse/homeserver.yaml absent (il est versionné dans le dépôt)"
-if [ ! -f synapse/local.bridge.signing.key ]; then
-  "${DOCKER[@]}" run --rm -u "$MYUID:$MYGID" --entrypoint python \
-    -v "$PWD/synapse:/data" -v "$PWD/secrets:/run/secrets:ro" \
-    matrixdotorg/synapse:latest -m synapse.app.homeserver --config-path /data/homeserver.yaml --generate-keys
+if [ "${EXT[mautrix-signal]}" = 0 ]; then
+  gen_registration mautrix-signal mautrix-signal dock.mau.dev/mautrix/signal:latest "$SIGNAL_AS_TOKEN" "$SIGNAL_HS_TOKEN" signal_registration
+fi
+if [ "${EXT[mautrix-whatsapp]}" = 0 ]; then
+  gen_registration mautrix-whatsapp mautrix-whatsapp dock.mau.dev/mautrix/whatsapp:latest "$WHATSAPP_AS_TOKEN" "$WHATSAPP_HS_TOKEN" whatsapp_registration
 fi
 
-"${DOCKER[@]}" network inspect bridgenet >/dev/null 2>&1 || "${DOCKER[@]}" network create bridgenet >/dev/null
-if [ "$EXTERNAL_PG" = 1 ]; then
-  "${DOCKER[@]}" start postgres >/dev/null 2>&1 || true
-  "${DOCKER[@]}" network connect --alias postgres bridgenet postgres >/dev/null 2>&1 || true
-  echo "Postgres existant réutilisé tel quel (aucune modification)"
-fi
-conflicts=()
-for c in synapse mautrix-signal mautrix-whatsapp auto-bridge-signal; do
-  "${DOCKER[@]}" inspect "$c" >/dev/null 2>&1 || continue
-  owner="$("${DOCKER[@]}" inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$c" 2>/dev/null || true)"
-  [ "$owner" = "$PROJECT" ] || conflicts+=("$c")
-done
-if [ "${#conflicts[@]}" -gt 0 ]; then
-  echo "Conteneurs existants hors de ce projet : ${conflicts[*]}"
-  echo "Ils seront arrêtés et renommés en <nom>-old (rien n'est supprimé, données et volumes conservés), puis remplacés par les nouveaux qui reprennent la même base."
-  [ -t 0 ] || die "confirmation impossible sans terminal"
-  read -r -p "Continuer ? [o/N] " rep
-  case "$rep" in o|O|oui|y|Y) ;; *) die "abandon : aucun conteneur modifié";; esac
-  for c in "${conflicts[@]}"; do
-    new="$c-old"
-    "${DOCKER[@]}" inspect "$new" >/dev/null 2>&1 && new="$c-old-$(date +%s)"
-    "${DOCKER[@]}" stop "$c" >/dev/null
-    "${DOCKER[@]}" rename "$c" "$new"
-    echo "  $c -> $new (arrêté, conservé)"
+if [ "${EXT[synapse]}" = 0 ]; then
+  echo "Synapse"
+  [ -f synapse/homeserver.yaml ] || die "synapse/homeserver.yaml absent (il est versionné dans le dépôt)"
+  for r in signal_registration whatsapp_registration; do
+    [ -f "secrets/$r" ] || die "secrets/$r absent : un bridge existant est réutilisé mais le Synapse du projet a besoin de son fichier registration (copie-le dans secrets/$r)"
   done
+  if [ ! -f synapse/local.bridge.signing.key ]; then
+    "${DOCKER[@]}" run --rm -u "$MYUID:$MYGID" --entrypoint python \
+      -v "$PWD/synapse:/data" -v "$PWD/secrets:/run/secrets:ro" \
+      matrixdotorg/synapse:latest -m synapse.app.homeserver --config-path /data/homeserver.yaml --generate-keys
+  fi
 fi
 
-if git rev-parse --git-dir >/dev/null 2>&1; then
-  git update-index --skip-worktree mautrix-signal/config.yaml mautrix-whatsapp/config.yaml 2>/dev/null || true
+if [ "${EXT[mautrix-signal]}" = 0 ] || [ "${EXT[mautrix-whatsapp]}" = 0 ]; then
+  if git rev-parse --git-dir >/dev/null 2>&1; then
+    git update-index --skip-worktree mautrix-signal/config.yaml mautrix-whatsapp/config.yaml 2>/dev/null || true
+  fi
 fi
 
+echo
+echo "Services qui seront créés : ${PROFILES_VALUE:-aucun (tout existe déjà)} (+ ceux sans profil)"
 cat <<MSG
-
-Configuration prête. Démarrage :
+Démarrage :
   ${DOCKER[*]} compose up -d
 Il ne reste qu'à renseigner dans $ENV_FILE les tokens Matrix obtenus après connexion :
   MATRIX_ACCESS_TOKEN, INVITER_ACCESS_TOKEN (selon les scripts), SIGNAL_RELAY_LOGIN_ID

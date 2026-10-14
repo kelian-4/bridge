@@ -6,7 +6,7 @@ networks:
 services:
   postgres:
     image: postgres:16-alpine
-    profiles: ["local-db"]
+    profiles: ["local-postgres"]
     container_name: postgres
     ports:
       - "127.0.0.1:5432:5432"
@@ -30,6 +30,7 @@ services:
 
   synapse:
     image: matrixdotorg/synapse:latest
+    profiles: ["local-synapse"]
     container_name: synapse
     restart: unless-stopped
     depends_on:
@@ -59,10 +60,13 @@ services:
 
   mautrix-whatsapp:
     image: dock.mau.dev/mautrix/whatsapp:latest
+    profiles: ["local-whatsapp"]
     container_name: mautrix-whatsapp
     restart: unless-stopped
     depends_on:
-      - synapse
+      synapse:
+        condition: service_started
+        required: false
     environment:
       BRIDGE_APPSERVICE__AS_TOKEN: ${WHATSAPP_AS_TOKEN}
       BRIDGE_APPSERVICE__HS_TOKEN: ${WHATSAPP_HS_TOKEN}
@@ -73,10 +77,13 @@ services:
 
   mautrix-signal:
     image: dock.mau.dev/mautrix/signal:latest
+    profiles: ["local-signal"]
     container_name: mautrix-signal
     restart: unless-stopped
     depends_on:
-      - synapse
+      synapse:
+        condition: service_started
+        required: false
     environment:
       BRIDGE_APPSERVICE__AS_TOKEN: ${SIGNAL_AS_TOKEN}
       BRIDGE_APPSERVICE__HS_TOKEN: ${SIGNAL_HS_TOKEN}
@@ -87,11 +94,16 @@ services:
 
   auto-bridge-signal:
     build: ./auto-bridge
+    profiles: ["local-auto-bridge"]
     container_name: auto-bridge-signal
     restart: unless-stopped
     depends_on:
-      - synapse
-      - mautrix-signal
+      synapse:
+        condition: service_started
+        required: false
+      mautrix-signal:
+        condition: service_started
+        required: false
     env_file:
       - ../.env
     environment:
