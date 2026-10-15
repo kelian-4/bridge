@@ -147,7 +147,11 @@ for c in "${SERVICES[@]}"; do
   if [ "${EXT[$c]}" = 1 ]; then
     "${DOCKER[@]}" start "$c" >/dev/null 2>&1 || true
     "${DOCKER[@]}" network connect --alias "$c" bridgenet "$c" >/dev/null 2>&1 || true
-    echo "Existant, réutilisé tel quel (aucune modification) : $c"
+    if [ "$("${DOCKER[@]}" inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" = "true" ]; then
+      echo "Existant, réutilisé tel quel (aucune modification) : $c"
+    else
+      echo "ATTENTION : $c existe mais ne démarre pas (voir : docker logs $c) ; il n'est pas modifié"
+    fi
   fi
 done
 

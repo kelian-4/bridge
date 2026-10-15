@@ -106,14 +106,12 @@ services:
         required: false
     env_file:
       - ../.env
+    network_mode: host
     environment:
-      MATRIX_HOMESERVER_URL: http://synapse:8008
       SYNC_TOKEN_FILE: /state/signal_next_batch
     volumes:
       - ../script/server:/app:ro
       - auto_bridge_state:/state
-    networks:
-      - bridgenet
 
 volumes:
   auto_bridge_state:
