@@ -83,11 +83,18 @@ profile_of() {
 }
 declare -A EXT=()
 profiles=()
+stale=()
 for c in "${SERVICES[@]}"; do
   EXT[$c]=0
   if "${DOCKER[@]}" inspect "$c" >/dev/null 2>&1; then
     owner="$("${DOCKER[@]}" inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$c" 2>/dev/null || true)"
-    [ "$owner" = "$PROJECT" ] || EXT[$c]=1
+    if [ "$owner" != "$PROJECT" ]; then
+      if [ "$("${DOCKER[@]}" inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" = "true" ]; then
+        EXT[$c]=1
+      else
+        stale+=("$c")
+      fi
+    fi
   fi
   [ "${EXT[$c]}" = 1 ] || profiles+=("$(profile_of "$c")")
 done
@@ -145,15 +152,13 @@ write_secret form_secret "$FORM_SECRET"
 "${DOCKER[@]}" network inspect bridgenet >/dev/null 2>&1 || "${DOCKER[@]}" network create bridgenet >/dev/null
 for c in "${SERVICES[@]}"; do
   if [ "${EXT[$c]}" = 1 ]; then
-    "${DOCKER[@]}" start "$c" >/dev/null 2>&1 || true
     "${DOCKER[@]}" network connect --alias "$c" bridgenet "$c" >/dev/null 2>&1 || true
-    if [ "$("${DOCKER[@]}" inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" = "true" ]; then
-      echo "Existant, réutilisé tel quel (aucune modification) : $c"
-    else
-      echo "ATTENTION : $c existe mais ne démarre pas (voir : docker logs $c) ; il n'est pas modifié"
-    fi
+    echo "En marche, réutilisé tel quel (aucune modification) : $c"
   fi
 done
+if [ "${#stale[@]}" -gt 0 ]; then
+  echo "Anciens conteneurs à l'arrêt, ignorés et laissés intacts : ${stale[*]}"
+fi
 
 MYUID="$(id -u)"
 MYGID="$(id -g)"
@@ -201,6 +206,25 @@ if [ "${EXT[mautrix-signal]}" = 0 ] || [ "${EXT[mautrix-whatsapp]}" = 0 ]; then
   if git rev-parse --git-dir >/dev/null 2>&1; then
     git update-index --skip-worktree mautrix-signal/config.yaml mautrix-whatsapp/config.yaml 2>/dev/null || true
   fi
+fi
+
+if command -v systemctl >/dev/null 2>&1; then
+  active=()
+  for u in matrix-synapse postgresql mautrix-signal mautrix-whatsapp; do
+    systemctl is-active --quiet "$u" 2>/dev/null && active+=("$u")
+  done
+  if [ "${#active[@]}" -gt 0 ]; then
+    echo "ATTENTION : services système actifs : ${active[*]}"
+    echo "  Arrête-les avant docker compose up (ports 8008/5432 déjà pris ; jamais deux bridges sur le même compte Signal)."
+  fi
+fi
+if command -v ss >/dev/null 2>&1; then
+  for entry in "synapse:8008" "postgres:5432"; do
+    svc="${entry%%:*}"; port="${entry##*:}"
+    if [ "${EXT[$svc]}" = 0 ] && ss -ltn "sport = :$port" 2>/dev/null | grep -q LISTEN; then
+      echo "ATTENTION : le port $port est déjà utilisé : le service $svc du projet ne pourra pas démarrer tant qu'il n'est pas libéré."
+    fi
+  done
 fi
 
 echo
