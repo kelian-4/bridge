@@ -162,6 +162,21 @@ fi
 
 MYUID="$(id -u)"
 MYGID="$(id -g)"
+env_set HOST_UID "$MYUID"
+env_set HOST_GID "$MYGID"
+
+fix_owner() {
+  local dir="$1"
+  [ -d "$dir" ] || return 0
+  if find "$dir" -maxdepth 1 \( -type f -o -type d \) ! -user "$MYUID" 2>/dev/null | grep -q .; then
+    echo "Droits corrigés sur $dir (les fichiers appartenaient à un conteneur ; contenu inchangé)"
+    "${DOCKER[@]}" run --rm -u 0:0 -v "$PWD/$dir:/d" --entrypoint chown "$YQ_IMAGE" -R "$MYUID:$MYGID" /d \
+      || die "impossible de corriger les droits de $dir : lance  sudo chown -R $MYUID:$MYGID $PWD/$dir  puis relance"
+  fi
+}
+fix_owner mautrix-signal
+fix_owner mautrix-whatsapp
+fix_owner synapse
 
 yq_run() {
   "${DOCKER[@]}" run --rm -u "$MYUID:$MYGID" -v "$PWD:/workdir" -e ADMIN_MXID "$YQ_IMAGE" "$@"

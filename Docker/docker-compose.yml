@@ -39,6 +39,8 @@ services:
       SYNAPSE_SERVER_NAME: local.bridge
       SYNAPSE_REPORT_STATS: "no"
       PGPASSWORD: ${POSTGRES_PASSWORD}
+      UID: ${HOST_UID:-991}
+      GID: ${HOST_GID:-991}
     secrets:
       - registration_shared_secret
       - macaroon_secret_key
@@ -67,6 +69,8 @@ services:
     environment:
       BRIDGE_APPSERVICE__AS_TOKEN: ${WHATSAPP_AS_TOKEN}
       BRIDGE_APPSERVICE__HS_TOKEN: ${WHATSAPP_HS_TOKEN}
+      UID: ${HOST_UID:-1337}
+      GID: ${HOST_GID:-1337}
     volumes:
       - ./mautrix-whatsapp:/data
     networks:
@@ -83,6 +87,8 @@ services:
     environment:
       BRIDGE_APPSERVICE__AS_TOKEN: ${SIGNAL_AS_TOKEN}
       BRIDGE_APPSERVICE__HS_TOKEN: ${SIGNAL_HS_TOKEN}
+      UID: ${HOST_UID:-1337}
+      GID: ${HOST_GID:-1337}
     volumes:
       - ./mautrix-signal:/data
     networks:
