@@ -81,6 +81,15 @@ profile_of() {
     auto-bridge-signal) echo local-auto-bridge;;
   esac
 }
+is_stable_running() {
+  local st started now
+  st="$("${DOCKER[@]}" inspect -f '{{.State.Running}} {{.State.Restarting}} {{.State.StartedAt}}' "$1" 2>/dev/null)" || return 1
+  set -- $st
+  [ "$1" = "true" ] && [ "$2" = "false" ] || return 1
+  started="$(date -d "$3" +%s 2>/dev/null)" || return 1
+  now="$(date +%s)"
+  [ $((now - started)) -ge 20 ]
+}
 declare -A EXT=()
 profiles=()
 stale=()
@@ -89,7 +98,7 @@ for c in "${SERVICES[@]}"; do
   if "${DOCKER[@]}" inspect "$c" >/dev/null 2>&1; then
     owner="$("${DOCKER[@]}" inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$c" 2>/dev/null || true)"
     if [ "$owner" != "$PROJECT" ]; then
-      if [ "$("${DOCKER[@]}" inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" = "true" ]; then
+      if is_stable_running "$c"; then
         EXT[$c]=1
       else
         stale+=("$c")
@@ -157,7 +166,7 @@ for c in "${SERVICES[@]}"; do
   fi
 done
 if [ "${#stale[@]}" -gt 0 ]; then
-  echo "Anciens conteneurs à l'arrêt, ignorés et laissés intacts : ${stale[*]}"
+  echo "Conteneurs existants arrêtés, instables ou en redémarrage : ignorés et laissés intacts : ${stale[*]}"
 fi
 
 MYUID="$(id -u)"
