@@ -23,7 +23,7 @@ fi
 
 rand() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 
-env_get() { grep -E "^$1=" "$ENV_FILE" | head -n1 | cut -d= -f2- | sed 's/[[:space:]]*#.*//'; }
+env_get() { { grep -E "^$1=" "$ENV_FILE" | head -n1 | cut -d= -f2- | sed 's/[[:space:]]*#.*//'; } || true; }
 
 env_set() {
   V="$2" awk -v k="$1" 'BEGIN { v = ENVIRON["V"] } $0 ~ "^" k "=" { print k "=" v; f = 1; next } { print } END { if (!f) print k "=" v }' "$ENV_FILE" > "$ENV_FILE.tmp"
@@ -233,13 +233,26 @@ if command -v systemctl >/dev/null 2>&1; then
     echo "  Arrête-les avant docker compose up (ports 8008/5432 déjà pris ; jamais deux bridges sur le même compte Signal)."
   fi
 fi
+port_busy() { ss -ltn "sport = :$1" 2>/dev/null | grep -q LISTEN; }
 if command -v ss >/dev/null 2>&1; then
-  for entry in "synapse:8008" "postgres:5432"; do
-    svc="${entry%%:*}"; port="${entry##*:}"
-    if [ "${EXT[$svc]}" = 0 ] && ss -ltn "sport = :$port" 2>/dev/null | grep -q LISTEN; then
-      echo "ATTENTION : le port $port est déjà utilisé : le service $svc du projet ne pourra pas démarrer tant qu'il n'est pas libéré."
+  if [ "${EXT[synapse]}" = 0 ] && port_busy 8008; then
+    echo "ATTENTION : le port 8008 est déjà utilisé : le Synapse du projet ne pourra pas démarrer tant qu'il n'est pas libéré."
+  fi
+  if [ "${EXT[postgres]}" = 0 ]; then
+    pg_running="$("${DOCKER[@]}" inspect -f '{{.State.Running}}' "${PROJECT}-postgres-1" 2>/dev/null || true)"
+    cur_port="$(env_get POSTGRES_HOST_PORT)"; cur_port="${cur_port:-5432}"
+    if [ "$pg_running" != "true" ] && port_busy "$cur_port"; then
+      new_port=""
+      for p in 5433 5434 5435 5436 5437 5438 5439 5440; do
+        port_busy "$p" || { new_port="$p"; break; }
+      done
+      [ -n "$new_port" ] || die "aucun port libre trouvé entre 5433 et 5440 pour Postgres"
+      env_set POSTGRES_HOST_PORT "$new_port"
+      pg_dsn="$(env_get PG_DSN)"
+      case "$pg_dsn" in *127.0.0.1:"$cur_port"/*) env_set PG_DSN "${pg_dsn/127.0.0.1:$cur_port\//127.0.0.1:$new_port/}";; esac
+      echo "Le port $cur_port est pris par un autre processus : Postgres du projet publié sur 127.0.0.1:$new_port à la place (POSTGRES_HOST_PORT dans .env)."
     fi
-  done
+  fi
 fi
 
 echo
