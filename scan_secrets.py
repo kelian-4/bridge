@@ -26,7 +26,7 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 # Valeurs qui ressemblent à un secret mais n'en sont pas (placeholders)
-SAFE_HINTS = ("CHANGE_ME", "changeme", "your_", "<", "${", "os.environ", "strenv(", "$(ask ", "example", "xxxx")
+SAFE_HINTS = ("CHANGE_ME", "changeme", "your_", "<", "${", "os.environ", "strenv(", "re.search(", "$(ask ", "example", "xxxx")
 
 SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules"}
 MAX_SIZE = 2_000_000
