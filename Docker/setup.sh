@@ -268,8 +268,15 @@ if command -v systemctl >/dev/null 2>&1; then
   fi
 fi
 port_busy() { ss -ltn "sport = :$1" 2>/dev/null | grep -q LISTEN; }
+our_running() {
+  local st owner
+  st="$("${DOCKER[@]}" inspect -f '{{.State.Running}} {{.State.Restarting}}' "$1" 2>/dev/null)" || return 1
+  [ "${st%% *}" = "true" ] || return 1
+  owner="$("${DOCKER[@]}" inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$1" 2>/dev/null)"
+  [ "$owner" = "$PROJECT" ]
+}
 if command -v ss >/dev/null 2>&1; then
-  if [ "${EXT[synapse]}" = 0 ] && port_busy 8008; then
+  if [ "${EXT[synapse]}" = 0 ] && ! our_running synapse && port_busy 8008; then
     echo "ATTENTION : le port 8008 est déjà utilisé : le Synapse du projet ne pourra pas démarrer tant qu'il n'est pas libéré."
   fi
   if [ "${EXT[postgres]}" = 0 ]; then
