@@ -26,20 +26,22 @@ def call(method, url, data=None, token=None):
 
 
 def find_shared_secret(homeserver_yaml):
-    env = os.environ.get("REGISTRATION_SHARED_SECRET", "").strip()
-    if env:
-        return env
     text = Path(homeserver_yaml).read_text()
+    m = re.search(r"(?m)^registration_shared_secret:\s*(.+)$", text)
+    if m:
+        value = m.group(1).strip().strip("\"'")
+        if value and "CHANGE_ME" not in value:
+            return value
     m = re.search(r"(?m)^registration_shared_secret_path:\s*(\S+)", text)
     if m:
         for candidate in (m.group(1), "Docker/secrets/" + Path(m.group(1)).name):
             p = Path(candidate)
             if p.is_file():
                 return p.read_text().strip()
-    m = re.search(r"(?m)^registration_shared_secret:\s*(.+)$", text)
-    if m:
-        return m.group(1).strip().strip("\"'")
-    sys.exit("registration_shared_secret introuvable (variable REGISTRATION_SHARED_SECRET, ou --homeserver-yaml)")
+    env = os.environ.get("REGISTRATION_SHARED_SECRET", "").strip()
+    if env:
+        return env
+    sys.exit("registration_shared_secret introuvable dans " + str(homeserver_yaml))
 
 
 def main():
