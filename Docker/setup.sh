@@ -190,7 +190,7 @@ fix_owner mautrix-whatsapp
 fix_owner synapse
 
 yq_run() {
-  "${DOCKER[@]}" run --rm -u "$MYUID:$MYGID" -v "$PWD:/workdir" -e ADMIN_MXID "$YQ_IMAGE" "$@"
+  "${DOCKER[@]}" run --rm -u "$MYUID:$MYGID" -v "$PWD:/workdir" -e ADMIN_MXID -e AS_EFF -e HS_EFF "$YQ_IMAGE" "$@"
 }
 
 gen_registration() {
@@ -202,10 +202,31 @@ gen_registration() {
     del(.bridge.permissions["@admin:local.bridge"]) |
     del(.bridge.permissions["@CHANGE_ME:local.bridge"])
   ' "$dir/config.yaml"
-  "${DOCKER[@]}" run --rm -u "$MYUID:$MYGID" -v "$PWD/$dir:/data" -v "$PWD/secrets:/out" \
-    -e "BRIDGE_APPSERVICE__AS_TOKEN=$as" -e "BRIDGE_APPSERVICE__HS_TOKEN=$hs" \
-    --entrypoint "/usr/bin/$bin" "$image" -g -c /data/config.yaml -r "/out/$out"
+  if [ -s "secrets/$out" ]; then
+    echo "  registration déjà générée (tokens vérifiés, pas re-tirés)"
+  else
+    "${DOCKER[@]}" run --rm -u "$MYUID:$MYGID" -v "$PWD/$dir:/data" -v "$PWD/secrets:/out" \
+      -e "BRIDGE_APPSERVICE__AS_TOKEN=$as" -e "BRIDGE_APPSERVICE__HS_TOKEN=$hs" \
+      --entrypoint "/usr/bin/$bin" "$image" -g -c /data/config.yaml -r "/out/$out"
+  fi
+  prefix="$(yq_run '.env_config_prefix' "$dir/config.yaml")"
+  if [ -z "$prefix" ] || [ "$prefix" = "null" ]; then
+    AS_EFF="$(yq_run '.appservice.as_token' "$dir/config.yaml")"
+    HS_EFF="$(yq_run '.appservice.hs_token' "$dir/config.yaml")"
+  else
+    AS_EFF="$as"
+    HS_EFF="$hs"
+  fi
+  export AS_EFF HS_EFF
+  yq_run -i '.as_token = strenv(AS_EFF) | .hs_token = strenv(HS_EFF)' "secrets/$out"
   chmod 644 "secrets/$out"
+}
+
+sync_synapse_registration() {
+  local name="$1" out="$2"
+  if grep -q "/data/$name" synapse/homeserver.yaml 2>/dev/null; then
+    cp "secrets/$out" "synapse/$name"
+  fi
 }
 
 if [ "${EXT[mautrix-signal]}" = 0 ]; then
@@ -218,6 +239,8 @@ fi
 if [ "${EXT[synapse]}" = 0 ]; then
   echo "Synapse"
   [ -f synapse/homeserver.yaml ] || die "synapse/homeserver.yaml absent (il est versionné dans le dépôt)"
+  sync_synapse_registration signal-registration.yaml signal_registration
+  sync_synapse_registration whatsapp-registration.yaml whatsapp_registration
   for r in signal_registration whatsapp_registration; do
     [ -f "secrets/$r" ] || die "secrets/$r absent : un bridge existant est réutilisé mais le Synapse du projet a besoin de son fichier registration (copie-le dans secrets/$r)"
   done
