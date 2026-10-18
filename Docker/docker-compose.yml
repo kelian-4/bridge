@@ -7,6 +7,7 @@ services:
   postgres:
     image: postgres:16-alpine
     profiles: ["local-postgres"]
+    container_name: postgres
     ports:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     restart: unless-stopped
@@ -30,6 +31,7 @@ services:
   synapse:
     image: matrixdotorg/synapse:latest
     profiles: ["local-synapse"]
+    container_name: synapse
     restart: unless-stopped
     depends_on:
       postgres:
@@ -61,6 +63,7 @@ services:
   mautrix-whatsapp:
     image: dock.mau.dev/mautrix/whatsapp:latest
     profiles: ["local-whatsapp"]
+    container_name: mautrix-whatsapp
     restart: unless-stopped
     depends_on:
       synapse:
@@ -79,6 +82,7 @@ services:
   mautrix-signal:
     image: dock.mau.dev/mautrix/signal:latest
     profiles: ["local-signal"]
+    container_name: mautrix-signal
     restart: unless-stopped
     depends_on:
       synapse:
@@ -97,6 +101,7 @@ services:
   auto-bridge-signal:
     build: ./auto-bridge
     profiles: ["local-auto-bridge"]
+    container_name: auto-bridge-signal
     restart: unless-stopped
     depends_on:
       synapse:

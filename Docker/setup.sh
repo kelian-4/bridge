@@ -166,7 +166,9 @@ for c in "${SERVICES[@]}"; do
   fi
 done
 if [ "${#stale[@]}" -gt 0 ]; then
-  echo "Conteneurs existants arrêtés, instables ou en redémarrage : ignorés et laissés intacts : ${stale[*]}"
+  echo "Conteneurs existants arrêtés, instables ou en redémarrage : ${stale[*]}"
+  echo "  Ils gardent d'anciens chemins de volumes et bloquent le nom : pour les remplacer par ceux du projet (mêmes dossiers de données, rien n'est supprimé côté données) :"
+  echo "    docker rm ${stale[*]}"
 fi
 
 MYUID="$(id -u)"
@@ -248,7 +250,7 @@ if command -v ss >/dev/null 2>&1; then
     echo "ATTENTION : le port 8008 est déjà utilisé : le Synapse du projet ne pourra pas démarrer tant qu'il n'est pas libéré."
   fi
   if [ "${EXT[postgres]}" = 0 ]; then
-    pg_running="$("${DOCKER[@]}" inspect -f '{{.State.Running}}' "${PROJECT}-postgres-1" 2>/dev/null || true)"
+    pg_running="$("${DOCKER[@]}" inspect -f '{{.State.Running}}' postgres 2>/dev/null || true)"
     cur_port="$(env_get POSTGRES_HOST_PORT)"; cur_port="${cur_port:-5432}"
     if [ "$pg_running" != "true" ] && port_busy "$cur_port"; then
       new_port=""
