@@ -19,7 +19,7 @@ TELEGRAM_GHOSTS_TO_INVITE = [
     g.strip()
     for g in os.environ.get(
         "TELEGRAM_GHOSTS_TO_INVITE",
-        "@telegram_8941605114:local.bridge,@telegram_1164603397:local.bridge,@telegrambot:local.bridge",
+        "",
     ).split(",")
     if g.strip()
 ]
