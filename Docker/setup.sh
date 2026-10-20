@@ -59,7 +59,18 @@ if ! docker info >/dev/null 2>&1; then
   esac
   "${DOCKER[@]}" info >/dev/null 2>&1 || die "Docker reste injoignable (${DOCKER[*]} info échoue). Vérifie : systemctl status docker"
 fi
-"${DOCKER[@]}" compose version >/dev/null 2>&1 || die "le plugin « docker compose » est absent (Debian/Ubuntu : docker-compose-v2 ; Arch : docker-compose)"
+if ! "${DOCKER[@]}" compose version >/dev/null 2>&1; then
+  echo "Le plugin « docker compose » est absent."
+  confirm "L'installer maintenant ?" || die "installe le plugin compose (Debian/Ubuntu : docker-compose-v2 ; Arch : docker-compose), puis relance ./Docker/setup.sh"
+  if command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get install -y docker-compose-v2
+  elif command -v pacman >/dev/null 2>&1; then
+    sudo pacman -S --needed --noconfirm docker-compose
+  else
+    die "gestionnaire de paquets non pris en charge : installe le plugin « docker compose » à la main"
+  fi
+  "${DOCKER[@]}" compose version >/dev/null 2>&1 || die "le plugin « docker compose » reste introuvable après l'installation"
+fi
 
 rand() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 
