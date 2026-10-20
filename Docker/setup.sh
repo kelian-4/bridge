@@ -8,18 +8,58 @@ YQ_IMAGE="mikefarah/yq:4"
 
 die() { echo "Erreur: $*" >&2; exit 1; }
 
-if ! command -v docker >/dev/null 2>&1; then
-  command -v apt-get >/dev/null 2>&1 || die "docker est absent et apt-get introuvable : installe Docker manuellement (sur NixOS : virtualisation.docker.enable = true)"
-  echo "Installation de Docker"
-  sudo apt-get update
-  sudo apt-get install -y docker.io docker-compose-v2
+confirm() {
+  [ -t 0 ] || return 1
+  local rep
+  read -r -p "$1 [O/n] " rep
+  case "$rep" in n|N|non|no) return 1;; *) return 0;; esac
+}
+
+install_docker() {
+  if command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y docker.io docker-compose-v2
+  elif command -v pacman >/dev/null 2>&1; then
+    sudo pacman -S --needed --noconfirm docker docker-compose
+  else
+    die "docker est absent et aucun gestionnaire de paquets pris en charge (apt, pacman) : installe Docker manuellement (sur NixOS : virtualisation.docker.enable = true)"
+  fi
   sudo usermod -aG docker "$USER" || true
+}
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker n'est pas installé."
+  confirm "L'installer maintenant ?" || die "Docker est requis : installe-le, puis relance ./Docker/setup.sh"
+  install_docker
 fi
+
 DOCKER=(docker)
 if ! docker info >/dev/null 2>&1; then
-  DOCKER=(sudo docker)
-  echo "Accès direct à Docker impossible : utilisation de sudo (reconnecte-toi pour que le groupe docker soit pris en compte)"
+  docker_err="$(docker info 2>&1 || true)"
+  case "$docker_err" in
+    *[Pp]ermission\ denied*)
+      DOCKER=(sudo docker)
+      echo "Docker est démarré mais ton compte n'a pas le droit de l'utiliser : utilisation de sudo (ajoute-toi au groupe docker puis reconnecte-toi pour t'en passer)"
+      ;;
+    *)
+      echo "Le démon Docker ne répond pas."
+      if command -v systemctl >/dev/null 2>&1 && ! systemctl is-active --quiet docker 2>/dev/null; then
+        if confirm "Démarrer le service docker et l'activer au démarrage ?"; then
+          sudo systemctl enable --now docker || die "impossible de démarrer le service docker (voir : systemctl status docker)"
+          sleep 2
+        else
+          die "le service docker est arrêté : lance  sudo systemctl enable --now docker  puis relance ./Docker/setup.sh"
+        fi
+      fi
+      if ! docker info >/dev/null 2>&1; then
+        DOCKER=(sudo docker)
+        echo "Accès direct à Docker impossible : utilisation de sudo (reconnecte-toi pour que le groupe docker soit pris en compte)"
+      fi
+      ;;
+  esac
+  "${DOCKER[@]}" info >/dev/null 2>&1 || die "Docker reste injoignable (${DOCKER[*]} info échoue). Vérifie : systemctl status docker"
 fi
+"${DOCKER[@]}" compose version >/dev/null 2>&1 || die "le plugin « docker compose » est absent (Debian/Ubuntu : docker-compose-v2 ; Arch : docker-compose)"
 
 rand() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 
