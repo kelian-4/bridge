@@ -15,22 +15,45 @@ confirm() {
   case "$rep" in n|N|non|no) return 1;; *) return 0;; esac
 }
 
-install_docker() {
-  if command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update
-    sudo apt-get install -y docker.io docker-compose-v2
-  elif command -v pacman >/dev/null 2>&1; then
-    sudo pacman -S --needed --noconfirm docker docker-compose
-  else
-    die "docker est absent et aucun gestionnaire de paquets pris en charge (apt, pacman) : installe Docker manuellement (sur NixOS : virtualisation.docker.enable = true)"
-  fi
-  sudo usermod -aG docker "$USER" || true
+PM=""
+if command -v apt-get >/dev/null 2>&1; then PM=apt; elif command -v pacman >/dev/null 2>&1; then PM=pacman; fi
+
+pkg_for() {
+  case "$PM:$1" in
+    apt:docker) echo docker.io;;      pacman:docker) echo docker;;
+    apt:compose) echo docker-compose-v2;; pacman:compose) echo docker-compose;;
+    apt:python) echo python3;;        pacman:python) echo python;;
+    apt:ss|pacman:ss) echo iproute2;;
+    apt:awk|pacman:awk) echo gawk;;
+  esac
 }
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "Docker n'est pas installé."
-  confirm "L'installer maintenant ?" || die "Docker est requis : installe-le, puis relance ./Docker/setup.sh"
-  install_docker
+python_ok() { command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; }
+
+check_prereqs() {
+  missing=()
+  command -v docker >/dev/null 2>&1 || missing+=(docker)
+  if command -v docker >/dev/null 2>&1; then docker compose version >/dev/null 2>&1 || missing+=(compose); else missing+=(compose); fi
+  python_ok || missing+=(python)
+  command -v awk >/dev/null 2>&1 || missing+=(awk)
+  command -v ss >/dev/null 2>&1 || missing+=(ss)
+}
+
+check_prereqs
+if [ "${#missing[@]}" -gt 0 ]; then
+  echo "Vérification des prérequis : il manque ${missing[*]}"
+  [ -n "$PM" ] || die "installe à la main : ${missing[*]} (docker, plugin docker compose, python 3.10+, awk, ss) ; gestionnaire de paquets non pris en charge (apt, pacman). Sur NixOS : virtualisation.docker.enable = true"
+  pkgs=()
+  for m in "${missing[@]}"; do pkgs+=("$(pkg_for "$m")"); done
+  echo "Paquets à installer avec $PM : ${pkgs[*]}"
+  confirm "Tout installer maintenant ?" || die "installe : ${pkgs[*]} puis relance ./Docker/setup.sh"
+  case "$PM" in
+    apt) sudo apt-get update && sudo apt-get install -y "${pkgs[@]}" || die "installation impossible (apt)";;
+    pacman) sudo pacman -S --needed --noconfirm "${pkgs[@]}" || die "installation impossible : si pacman signale un fichier introuvable, lance  sudo pacman -Syu  puis relance ./Docker/setup.sh";;
+  esac
+  printf '%s\n' "${missing[@]}" | grep -qx docker && { sudo usermod -aG docker "${USER:-$(id -un)}" || true; }
+  check_prereqs
+  [ "${#missing[@]}" -eq 0 ] || die "toujours manquant après l'installation : ${missing[*]}"
 fi
 
 DOCKER=(docker)
@@ -59,19 +82,6 @@ if ! docker info >/dev/null 2>&1; then
   esac
   "${DOCKER[@]}" info >/dev/null 2>&1 || die "Docker reste injoignable (${DOCKER[*]} info échoue). Vérifie : systemctl status docker"
 fi
-if ! "${DOCKER[@]}" compose version >/dev/null 2>&1; then
-  echo "Le plugin « docker compose » est absent."
-  confirm "L'installer maintenant ?" || die "installe le plugin compose (Debian/Ubuntu : docker-compose-v2 ; Arch : docker-compose), puis relance ./Docker/setup.sh"
-  if command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get install -y docker-compose-v2
-  elif command -v pacman >/dev/null 2>&1; then
-    sudo pacman -S --needed --noconfirm docker-compose
-  else
-    die "gestionnaire de paquets non pris en charge : installe le plugin « docker compose » à la main"
-  fi
-  "${DOCKER[@]}" compose version >/dev/null 2>&1 || die "le plugin « docker compose » reste introuvable après l'installation"
-fi
-
 rand() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 
 env_get() { { grep -E "^$1=" "$ENV_FILE" | head -n1 | cut -d= -f2- | sed 's/[[:space:]]*#.*//'; } || true; }
