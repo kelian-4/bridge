@@ -34,6 +34,20 @@ Le mot de passe du compte est demandé (ou lu dans la variable donnée par `--pa
 
 Il reste ensuite à renseigner dans `.env` `INVITER_ACCESS_TOKEN` (si tu utilises `rejoin_rooms.py`) et `SIGNAL_RELAY_LOGIN_ID`.
 
+## Connexion aux bridges (WhatsApp, Signal, Telegram)
+
+Tout se fait dans le terminal, avec le token créé à l'étape précédente. Le script ouvre (ou retrouve) la discussion avec le bot du bridge, envoie `login`, affiche ses réponses et les QR codes dans le terminal, et envoie ce que tu tapes (numéro de téléphone, code reçu...). `/quit` abandonne.
+
+```
+./with-env.sh python3 script/server/bridge_login.py signal --flow qr
+./with-env.sh python3 script/server/bridge_login.py whatsapp --flow qr
+./with-env.sh python3 script/server/bridge_login.py telegram
+```
+
+Sans `--flow`, le bot propose lui-même les méthodes disponibles ; tape alors par exemple `login qr` pour en choisir une (les noms dépendent du bridge). Le terminal doit être assez grand pour afficher le QR code en entier.
+
+À la fin d'une connexion Signal réussie, l'identifiant de connexion est écrit dans `.env` (`SIGNAL_RELAY_LOGIN_ID`) s'il n'y est pas encore renseigné.
+
 ## Configuration des scripts
 
 Les scripts lisent leurs secrets dans l'environnement. Lancer un script avec le `.env` chargé :
