@@ -5,7 +5,7 @@ networks:
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     profiles: ["local-postgres"]
     container_name: postgres
     ports:
@@ -29,7 +29,7 @@ services:
       retries: 5
 
   synapse:
-    image: matrixdotorg/synapse:latest
+    image: ${SYNAPSE_IMAGE:-matrixdotorg/synapse:latest}
     profiles: ["local-synapse"]
     container_name: synapse
     restart: unless-stopped
@@ -61,7 +61,7 @@ services:
       - "127.0.0.1:8008:8008"
 
   mautrix-whatsapp:
-    image: dock.mau.dev/mautrix/whatsapp:latest
+    image: ${WHATSAPP_IMAGE:-dock.mau.dev/mautrix/whatsapp:latest}
     profiles: ["local-whatsapp"]
     container_name: mautrix-whatsapp
     restart: unless-stopped
@@ -80,7 +80,7 @@ services:
       - bridgenet
 
   mautrix-signal:
-    image: dock.mau.dev/mautrix/signal:latest
+    image: ${SIGNAL_IMAGE:-dock.mau.dev/mautrix/signal:latest}
     profiles: ["local-signal"]
     container_name: mautrix-signal
     restart: unless-stopped

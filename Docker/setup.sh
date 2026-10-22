@@ -25,6 +25,7 @@ pkg_for() {
     apt:python) echo python3;;        pacman:python) echo python;;
     apt:ss|pacman:ss) echo iproute2;;
     apt:awk|pacman:awk) echo gawk;;
+    apt:curl|pacman:curl) echo curl;;
   esac
 }
 
@@ -37,6 +38,7 @@ check_prereqs() {
   python_ok || missing+=(python)
   command -v awk >/dev/null 2>&1 || missing+=(awk)
   command -v ss >/dev/null 2>&1 || missing+=(ss)
+  command -v curl >/dev/null 2>&1 || missing+=(curl)
 }
 
 check_prereqs
@@ -170,6 +172,59 @@ for c in "${SERVICES[@]}"; do
 done
 PROFILES_VALUE="$(IFS=,; echo "${profiles[*]-}")"
 
+img() { local v; v="$(env_get "$1")"; if [ -n "$v" ]; then echo "$v"; else echo "$2"; fi; }
+SIGNAL_IMG="$(img SIGNAL_IMAGE dock.mau.dev/mautrix/signal:latest)"
+WHATSAPP_IMG="$(img WHATSAPP_IMAGE dock.mau.dev/mautrix/whatsapp:latest)"
+SYNAPSE_IMG="$(img SYNAPSE_IMAGE matrixdotorg/synapse:latest)"
+POSTGRES_IMG="$(img POSTGRES_IMAGE postgres:16-alpine)"
+
+diagnose_registry() {
+  local host="$1" code4 code any
+  echo "  Diagnostic réseau vers $host :"
+  if command -v getent >/dev/null 2>&1 && ! getent hosts "$host" >/dev/null 2>&1; then
+    echo "  - le nom $host ne se résout pas (DNS) : vérifie la connexion et les serveurs DNS de la machine"
+    return
+  fi
+  code4="$(curl -4 -sS -m 15 -o /dev/null -w '%{http_code}' "https://$host/v2/" 2>&1 || true)"
+  code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "https://$host/v2/" 2>&1 || true)"
+  echo "  - connexion IPv4 : ${code4##*$'\n'}"
+  echo "  - connexion par défaut : ${code##*$'\n'}"
+  case "$code4" in
+    200|401|403|404) any=1;;
+    *) any=0;;
+  esac
+  if [ "$any" = 1 ]; then
+    echo "  Le registre répond en IPv4 : si 'connexion par défaut' échoue, l'IPv6 est probablement cassé (essaie : sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1) ; si Docker utilise un proxy, il faut le déclarer pour le démon."
+  else
+    echo "  La connexion vers $host est coupée avant la réponse (TLS) : cela vient du réseau de la machine (MTU d'une machine virtuelle, proxy, pare-feu, blocage par le fournisseur) et non de ce projet."
+    echo "  Test utile : curl -v https://$host/v2/   (essaie aussi depuis un autre réseau)."
+  fi
+}
+
+pull_image() {
+  local image="$1" n host
+  "${DOCKER[@]}" image inspect "$image" >/dev/null 2>&1 && return 0
+  for n in 1 2 3; do
+    echo "Téléchargement de $image (essai $n/3)..."
+    "${DOCKER[@]}" pull "$image" && return 0
+    sleep 3
+  done
+  host="${image%%/*}"
+  case "$host" in *.*|*:*) ;; *) host="registry-1.docker.io";; esac
+  echo "Impossible de télécharger $image."
+  diagnose_registry "$host"
+  echo "  Autre source : définis la variable d'image dans $ENV_FILE (SIGNAL_IMAGE, WHATSAPP_IMAGE, SYNAPSE_IMAGE ou POSTGRES_IMAGE) avec un miroir de ton choix, ou charge l'image à la main (docker load)."
+  die "image indisponible : $image (rien n'a été généré)"
+}
+
+echo "Vérification des images Docker"
+pull_image "$YQ_IMAGE"
+[ "${EXT[postgres]}" = 1 ] || pull_image "$POSTGRES_IMG"
+[ "${EXT[synapse]}" = 1 ] || pull_image "$SYNAPSE_IMG"
+[ "${EXT[mautrix-signal]}" = 1 ] || pull_image "$SIGNAL_IMG"
+[ "${EXT[mautrix-whatsapp]}" = 1 ] || pull_image "$WHATSAPP_IMG"
+[ "${EXT[auto-bridge-signal]}" = 1 ] || pull_image "python:3.12-slim"
+
 PG_PW_FILE="secrets/postgres_password.txt"
 NEED_PG_PW=0
 { [ "${EXT[synapse]}" = 0 ] || [ "${EXT[postgres]}" = 0 ]; } && NEED_PG_PW=1
@@ -291,10 +346,10 @@ sync_synapse_registration() {
 }
 
 if [ "${EXT[mautrix-signal]}" = 0 ]; then
-  gen_registration mautrix-signal mautrix-signal dock.mau.dev/mautrix/signal:latest "$SIGNAL_AS_TOKEN" "$SIGNAL_HS_TOKEN" signal_registration
+  gen_registration mautrix-signal mautrix-signal "$SIGNAL_IMG" "$SIGNAL_AS_TOKEN" "$SIGNAL_HS_TOKEN" signal_registration
 fi
 if [ "${EXT[mautrix-whatsapp]}" = 0 ]; then
-  gen_registration mautrix-whatsapp mautrix-whatsapp dock.mau.dev/mautrix/whatsapp:latest "$WHATSAPP_AS_TOKEN" "$WHATSAPP_HS_TOKEN" whatsapp_registration
+  gen_registration mautrix-whatsapp mautrix-whatsapp "$WHATSAPP_IMG" "$WHATSAPP_AS_TOKEN" "$WHATSAPP_HS_TOKEN" whatsapp_registration
 fi
 
 if [ "${EXT[synapse]}" = 0 ]; then
@@ -308,7 +363,7 @@ if [ "${EXT[synapse]}" = 0 ]; then
   if [ ! -f synapse/local.bridge.signing.key ]; then
     "${DOCKER[@]}" run --rm -u "$MYUID:$MYGID" --entrypoint python \
       -v "$PWD/synapse:/data" -v "$PWD/secrets:/run/secrets:ro" \
-      matrixdotorg/synapse:latest -m synapse.app.homeserver --config-path /data/homeserver.yaml --generate-keys
+      "$SYNAPSE_IMG" -m synapse.app.homeserver --config-path /data/homeserver.yaml --generate-keys
   fi
 fi
 
