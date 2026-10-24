@@ -36,8 +36,14 @@ class Client:
             with urllib.request.urlopen(r, timeout=timeout) as resp:
                 content = resp.read()
         except urllib.error.HTTPError as e:
-            detail = e.read().decode(errors="replace")[:200]
-            raise RuntimeError(f"HTTP {e.code} sur {method} {path.split('?')[0]} : {detail}")
+            raw = e.read().decode(errors="replace")
+            try:
+                detail = json.loads(raw).get("error", raw[:100])
+            except ValueError:
+                detail = raw[:100]
+            raise RuntimeError(f"{detail} ({e.code})")
+        except urllib.error.URLError:
+            raise RuntimeError("Synapse injoignable")
         return content if raw else json.loads(content)
 
     def whoami(self):
@@ -76,7 +82,7 @@ class Client:
                 return self.req("GET", path, raw=True)
             except RuntimeError:
                 continue
-        raise RuntimeError("téléchargement de l'image impossible")
+        raise RuntimeError("image introuvable")
 
 
 def find_dm(client, me, bot):
@@ -127,10 +133,10 @@ def show(client, content):
         if url:
             try:
                 print(png_to_terminal(client.download(url)))
-                print("\nScanne ce QR code avec l'application du téléphone.")
+                print("Scanne le QR code")
                 return
             except Exception as exc:
-                print(f"[image reçue, rendu impossible : {exc}] {body}")
+                print("Image reçue, affichage impossible")
                 return
     body = content.get("body", "")
     if body:
@@ -150,7 +156,7 @@ def main():
     args = ap.parse_args()
 
     if not args.token or args.token == "CHANGE_ME":
-        sys.exit("MATRIX_ACCESS_TOKEN manquant : lance d'abord get_token.py, puis ./with-env.sh")
+        sys.exit("MATRIX_ACCESS_TOKEN manquant")
     client = Client(args.homeserver, args.token)
     me = client.whoami()
     domain = me.split(":", 1)[1]
@@ -159,22 +165,22 @@ def main():
     else:
         kind = args.bridge.lower()
         if kind not in DEFAULT_BOTS:
-            sys.exit("bridge inconnu : whatsapp, signal, telegram, ou un identifiant de bot complet")
+            sys.exit("Bridge inconnu")
         bot = os.environ.get(kind.upper() + "_BOT_MXID") or f"@{DEFAULT_BOTS[kind]}:{domain}"
 
     room = find_dm(client, me, bot)
     if room:
-        print(f"Discussion avec {bot} retrouvée.")
+        print(f"Discussion {bot} ouverte")
     else:
-        print(f"Création de la discussion avec {bot}…")
         room = client.create_dm(bot)
+        print(f"Discussion {bot} créée")
         deadline = time.time() + 40
         while time.time() < deadline:
             if bot in client.members(room):
                 break
             time.sleep(1.5)
         else:
-            sys.exit(f"{bot} n'a pas rejoint la discussion : le bridge est-il démarré, et as-tu le droit de l'utiliser (permissions) ?")
+            sys.exit(f"{bot} n'a pas rejoint la discussion")
         time.sleep(2)
 
     since = client.sync(None, 0)["next_batch"]
@@ -194,13 +200,14 @@ def main():
                 try:
                     client.send(room, line)
                 except RuntimeError as exc:
-                    print(f"[envoi impossible : {exc}]")
+                    print("Envoi impossible")
 
     threading.Thread(target=read_input, daemon=True).start()
     if sys.stdin.isatty():
-        print("(tape ta réponse quand le bot la demande, /quit pour abandonner)")
+        print("Réponds au bot. /quit pour quitter")
 
     deadline = time.time() + args.timeout
+    flow_chosen = bool(args.flow)
     result = None
     last_ids = set()
     seen_own = False
@@ -208,7 +215,7 @@ def main():
         try:
             data = client.sync(since, 8000)
         except RuntimeError as exc:
-            print(f"[synchronisation : {exc}]")
+            print("Synchronisation interrompue")
             time.sleep(3)
             continue
         since = data["next_batch"]
@@ -227,6 +234,10 @@ def main():
                 print(f"[debug {time.strftime('%H:%M:%S')}] {ev['event_id'][:8]} {content.get('msgtype')} {content.get('body', '')[:40]!r}", file=sys.stderr)
             show(client, content)
             text = content.get("body", "")
+            if not flow_chosen and "`qr`" in text and re.search(r"flows?", text, re.I):
+                flow_chosen = True
+                client.send(room, f"{args.command} qr")
+                print(f"> {args.command} qr")
             if SUCCESS_RE.search(text):
                 result = ("ok", text)
             elif FAILURE_RE.search(text):
@@ -235,23 +246,25 @@ def main():
             break
 
     if stop.is_set():
-        print("Abandon.")
+        print("Abandon")
         return 130
     if not result:
-        print("Délai dépassé sans connexion.")
+        print("Délai dépassé")
         return 2
     if result[0] == "echec":
         return 1
-    print("\nConnexion réussie.")
+    print("Connexion réussie")
+    if kind in DEFAULT_BOTS:
+        write_env_value(args.env_file, kind.upper() + "_CONNECTED", "1")
     found = UUID_RE.search(result[1])
     if kind == "signal" and found:
         current = read_env_value(args.env_file, "SIGNAL_RELAY_LOGIN_ID")
         login_id = found.group(0)
         if current in (None, "", "CHANGE_ME", "00000000-0000-0000-0000-000000000000"):
             write_env_value(args.env_file, "SIGNAL_RELAY_LOGIN_ID", login_id)
-            print(f"SIGNAL_RELAY_LOGIN_ID écrit dans {args.env_file}.")
+            print("SIGNAL_RELAY_LOGIN_ID enregistré")
         elif current != login_id:
-            print(f"Identifiant de connexion Signal : {login_id} (différent de SIGNAL_RELAY_LOGIN_ID dans {args.env_file}, laissé tel quel).")
+            print(f"SIGNAL_RELAY_LOGIN_ID différent : {login_id}")
     return 0
 
 
