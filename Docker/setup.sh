@@ -322,8 +322,10 @@ fix_owner mautrix-whatsapp
 fix_owner synapse
 
 yq_run() {
-  "${DOCKER[@]}" run --rm -u "$MYUID:$MYGID" -v "$PWD:/workdir" -e ADMIN_MXID -e AS_EFF -e HS_EFF "$YQ_IMAGE" "$@"
+  "${DOCKER[@]}" run --rm -u "$MYUID:$MYGID" -v "$PWD:/workdir" -e "ADMIN_MXID=${ADMIN_MXID:-}" -e "AS_EFF=${AS_EFF:-}" -e "HS_EFF=${HS_EFF:-}" "$YQ_IMAGE" "$@"
 }
+
+reg_token() { grep -m1 -E "^\s*$2:" "$1" | sed -E 's/^[^:]*:\s*//; s/^["\x27]|["\x27]$//g' | tr -d '\n'; }
 
 gen_registration() {
   local dir="$1" bin="$2" image="$3" as="$4" hs="$5" out="$6" label="$7" prefix state
@@ -350,7 +352,9 @@ gen_registration() {
     HS_EFF="$hs"
   fi
   export AS_EFF HS_EFF
+  [ -n "$AS_EFF" ] && [ -n "$HS_EFF" ] || die "token $label vide"
   quiet yq_run -i '.as_token = strenv(AS_EFF) | .hs_token = strenv(HS_EFF)' "secrets/$out" || die "registration $label illisible"
+  [ "$(reg_token "secrets/$out" as_token)" = "$AS_EFF" ] || die "registration $label : token incorrect"
   chmod 644 "secrets/$out"
   say "Registration $label $state"
 }
@@ -362,11 +366,25 @@ sync_synapse_registration() {
   fi
 }
 
+reg_sum() { { cat secrets/signal_registration secrets/whatsapp_registration 2>/dev/null || true; } | sha256sum | cut -d' ' -f1; }
+REG_BEFORE="$(reg_sum)"
+cfg_sum() { { cat mautrix-signal/config.yaml mautrix-whatsapp/config.yaml 2>/dev/null || true; } | sha256sum | cut -d' ' -f1; }
+CFG_BEFORE="$(cfg_sum)"
+
 if [ "${EXT[mautrix-signal]}" = 0 ]; then
   gen_registration mautrix-signal mautrix-signal "$SIGNAL_IMG" "$SIGNAL_AS_TOKEN" "$SIGNAL_HS_TOKEN" signal_registration signal
 fi
 if [ "${EXT[mautrix-whatsapp]}" = 0 ]; then
   gen_registration mautrix-whatsapp mautrix-whatsapp "$WHATSAPP_IMG" "$WHATSAPP_AS_TOKEN" "$WHATSAPP_HS_TOKEN" whatsapp_registration whatsapp
+fi
+
+REG_CHANGED=0
+[ "$(reg_sum)" = "$REG_BEFORE" ] || REG_CHANGED=1
+CFG_CHANGED=0
+[ "$(cfg_sum)" = "$CFG_BEFORE" ] || CFG_CHANGED=1
+
+if [ "${EXT[mautrix-signal]}" = 0 ] && [ "${EXT[mautrix-whatsapp]}" = 0 ]; then
+  [ "$(reg_token secrets/signal_registration as_token)" != "$(reg_token secrets/whatsapp_registration as_token)" ] || die "registrations signal et whatsapp identiques"
 fi
 
 if [ "${EXT[synapse]}" = 0 ]; then
@@ -435,18 +453,39 @@ up_services=()
 for c in postgres synapse mautrix-signal mautrix-whatsapp; do
   if [ "${EXT[$c]}" = 0 ]; then up_services+=("$c"); fi
 done
+pre_existing=()
+for c in synapse mautrix-signal mautrix-whatsapp; do
+  if "${DOCKER[@]}" inspect "$c" >/dev/null 2>&1; then pre_existing+=("$c"); fi
+done
 if [ "${#up_services[@]}" -gt 0 ]; then
   say "Démarrage : ${up_services[*]}"
   quiet "${DOCKER[@]}" compose up -d "${up_services[@]}" || die "démarrage impossible"
+  recreate=()
+  for c in synapse mautrix-signal mautrix-whatsapp; do
+    [ "${EXT[$c]}" = 0 ] || continue
+    case " ${pre_existing[*]-} " in *" $c "*) ;; *) continue;; esac
+    if [ "$c" = synapse ] && [ "$REG_CHANGED" = 1 ]; then recreate+=("$c"); fi
+    if [ "$c" != synapse ] && [ "$CFG_CHANGED" = 1 ]; then recreate+=("$c"); fi
+  done
+  if [ "${#recreate[@]}" -gt 0 ]; then
+    say "Redémarrage : ${recreate[*]}"
+    quiet "${DOCKER[@]}" compose up -d --force-recreate "${recreate[@]}" || die "redémarrage impossible"
+  fi
 fi
 
 say "Attente de Synapse"
 ready=0
-for i in $(seq 1 60); do
+looping=0
+for i in $(seq 1 "${SETUP_WAIT:-60}"); do
   if curl -fsS -m 3 "$HS_URL/health" >/dev/null 2>&1; then ready=1; break; fi
+  if [ "$("${DOCKER[@]}" inspect -f '{{.State.Restarting}}' synapse 2>/dev/null || true)" = "true" ]; then looping=$((looping + 1)); else looping=0; fi
+  [ "$looping" -ge 3 ] && break
   sleep 2
 done
-[ "$ready" = 1 ] || die "Synapse ne répond pas : docker compose logs synapse"
+if [ "$ready" != 1 ]; then
+  reason="$("${DOCKER[@]}" logs --tail 300 synapse 2>&1 | grep -E 'Error|ERROR' | tail -n 1 | sed -E 's/^[[:space:]]+//' || true)"
+  die "Synapse ne démarre pas${reason:+ : $reason}"
+fi
 
 py() { python3 "$@"; }
 gettoken() { py ../script/server/get_token.py --homeserver "$HS_URL" --homeserver-yaml synapse/homeserver.yaml --env-file "$ENV_FILE" --execute "$@"; }
