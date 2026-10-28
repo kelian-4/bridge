@@ -521,3 +521,5 @@ if [ "${EXT[auto-bridge-signal]}" = 0 ]; then
 fi
 
 say "Terminé"
+say "Serveur : $HS_URL"
+say "Compte : $ADMIN_MXID"
