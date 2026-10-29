@@ -10,21 +10,6 @@ Stack Matrix auto-hébergée qui relie **WhatsApp** et **Signal** grâce à [mau
                   auto-bridge-signal ──────┘  (orchestration des salons)
 ```
 
-## Sommaire
-
-- [Ce que fait le projet](#ce-que-fait-le-projet)
-- [Prérequis](#prérequis)
-- [Installation rapide](#installation-rapide)
-- [Configuration](#configuration)
-- [Structure du dépôt](#structure-du-dépôt)
-- [Scripts](#scripts)
-- [Auto-bridge Signal](#auto-bridge-signal)
-- [Déploiement NixOS](#déploiement-nixos)
-- [Termux](#termux)
-- [Feuille de route](#feuille-de-route)
-- [Sécurité](#sécurité)
-
-## Ce que fait le projet
 
 - Déploie via Docker Compose : Postgres, Synapse, `mautrix-whatsapp`, `mautrix-signal` et un service d'orchestration.
 - Génère tous les secrets, les fichiers d'enregistrement des bridges (*registrations*) et le compte administrateur.
