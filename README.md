@@ -34,19 +34,18 @@ Stack Matrix auto-hébergée qui relie **WhatsApp** et **Signal** grâce à [mau
 
 ## Prérequis
 
-- Linux avec `apt` ou `pacman` (le script installe les prérequis manquants après confirmation).
 - Docker avec le plugin Compose, Python 3.10+, `curl`, `awk`, `ss`.
 - Un téléphone avec WhatsApp et Signal pour scanner les QR codes.
 
 ## Installation rapide
 
 ```bash
-git clone -b dev https://github.com/kelian-4/bridge.git
+git clone https://github.com/kelian-4/bridge.git
 cd bridge
 ./Docker/setup.sh
 ```
 
-Le script gère toute la chaîne : prérequis, images, secrets, configuration, démarrage de la stack, compte administrateur, tokens, connexion de Signal et de WhatsApp, puis lancement du service `auto-bridge-signal`. Il est **idempotent** : on peut le relancer, ce qui existe est conservé. Il détecte aussi les services déjà en marche (Synapse, Postgres, bridges) et ne les recrée pas.
+Le script gère toute la chaîne : prérequis, images, secrets, configuration, démarrage de la stack, compte administrateur, tokens, connexion de Signal et de WhatsApp, puis lancement du service `auto-bridge-signal`.Il détecte aussi les services déjà en marche (Synapse, Postgres, bridges) et ne les recrée pas.
 
 À la fin, il affiche l'URL du serveur (par défaut `http://127.0.0.1:8008`) et le compte administrateur.
 
@@ -54,7 +53,7 @@ Variables d'environnement optionnelles :
 
 | Variable | Effet |
 | --- | --- |
-| `ADMIN_PASSWORD` | mot de passe du compte administrateur, sans saisie |
+| `ADMIN_PASSWORD` | mot de passe du compte administrateur |
 | `SETUP_BRIDGES=signal,whatsapp` | bridges à connecter sans question |
 | `SETUP_YES=1` | installe les prérequis sans demander |
 | `SETUP_SKIP_LOGIN=1` | ne connecte aucun bridge |
@@ -93,7 +92,7 @@ Docker/
   auto-bridge/              image du service auto-bridge-signal
 script/
   server/                   administration Matrix / Synapse
-  termux/                   migration Postgres → SQLite
+  termux/                   script pour termux
 nix/                        module NixOS équivalent
 with-env.sh                 lance une commande avec .env chargé
 scan_secrets.py             détecte les secrets avant un commit
@@ -130,8 +129,7 @@ Les scripts de maintenance (`backfill_signal`, `mute_relay_everywhere`, `rejoin_
 4. lance `!signal create-group` ;
 5. lance `!signal set-relay <SIGNAL_RELAY_LOGIN_ID>`.
 
-Les groupes sont ainsi créés par un compte Signal dédié et non par le compte personnel, ce qui évite l'erreur « group master key not found in store » chez les membres qui n'ont jamais rejoint le groupe.
-
+Les groupes sont ainsi créés par un compte Signal lie et non par le compte personnel.
 Le service tourne dans le conteneur `auto-bridge-signal` et démarre une fois `SIGNAL_RELAY_LOGIN_ID` renseigné (obtenu après la connexion de Signal). Son état de synchronisation est conservé dans le volume `auto_bridge_state`.
 
 ```bash
@@ -151,19 +149,8 @@ docker compose -f Docker/docker-compose.yml logs -f auto-bridge-signal
 
 ## Feuille de route
 
-- [ ] **Telegram** : ajouter `mautrix-telegram` à `Docker/docker-compose.yml` (service, profile `local-telegram`, base `mautrix_telegram`, registration et tokens générés par `setup.sh`).
-- [ ] Étendre `setup.sh` : `connect_bridge telegram` et variables `TELEGRAM_AS_TOKEN` / `TELEGRAM_HS_TOKEN`.
-- [ ] Définir le comportement de l'auto-bridge pour Telegram (équivalent du relais Signal).
-
+- **Telegram** : ajouter `mautrix-telegram` à `Docker/docker-compose.yml` (service, profile `local-telegram`, base `mautrix_telegram`, registration et tokens générés par `setup.sh`).
+- Étendre `setup.sh` : `connect_bridge telegram` et variables `TELEGRAM_AS_TOKEN` / `TELEGRAM_HS_TOKEN`.
+- Définir le comportement de l'auto-bridge pour Telegram (équivalent du relais Signal).
+ 
 Déjà en place pour Telegram : le module NixOS, `TELEGRAM_BOT_MXID`, `bridge_login.py telegram` et `unbridge_telegram.py`.
-
-## Avertissement
-
-Ne jamais lancer deux bridges sur le même compte Signal en même temps.
-
-## Sécurité
-
-- `python3 scan_secrets.py .` vérifie qu'aucun secret n'est présent avant un commit (code de sortie 1 si un secret est trouvé).
-- `python3 sanitize_scripts.py` remplace les secrets codés en dur par des lectures de variables d'environnement (`--execute` pour écrire).
-- `.env` et `Docker/secrets/` ne doivent jamais être commités.
-- Synapse n'écoute que sur `127.0.0.1:8008` : pour un accès externe, placer un reverse proxy TLS devant.
