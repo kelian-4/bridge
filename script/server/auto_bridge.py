@@ -40,6 +40,7 @@ SYNC_TOKEN_FILE = os.environ.get("SYNC_TOKEN_FILE", "/var/lib/auto-bridge/telegr
 
 ERROR_KEYWORDS = ("error", "failed", "⚠", "not found", "invalid")
 CREATE_SUCCESS_MARKER = os.environ.get("TELEGRAM_CREATE_MARKER", "successfully created group")
+RELAY_SUCCESS_MARKER = os.environ.get("TELEGRAM_RELAY_MARKER", "will now be relayed")
 CONFIGURED_STATE_TYPE = "fr.kelian.auto_bridge_telegram"
 SYNC_TIMEOUT_MS = 30_000
 
@@ -201,6 +202,7 @@ def wait_for_bot_reply(
     timeout: int = BOT_RESPONSE_TIMEOUT,
     reply_required: bool = True,
     require_substring: str | None = None,
+    strict: bool = False,
 ) -> str:
     deadline = time.monotonic() + timeout
     since = after_sync_token
@@ -222,6 +224,8 @@ def wait_for_bot_reply(
             if any(kw in lowered for kw in ERROR_KEYWORDS):
                 raise BridgeCommandError(body.strip()[:200])
             if require_substring and require_substring.lower() not in lowered:
+                if strict:
+                    raise BridgeCommandError(body.strip()[:200])
                 continue
             return since
     if reply_required:
@@ -237,12 +241,13 @@ def run_bridge_command(
     sync_token: str,
     reply_required: bool = True,
     require_substring: str | None = None,
+    strict: bool = False,
 ) -> str:
     log.info("> %s", command)
     client.send_message(room_id, command)
     return wait_for_bot_reply(
         client, room_id, expected_sender, sync_token,
-        reply_required=reply_required, require_substring=require_substring,
+        reply_required=reply_required, require_substring=require_substring, strict=strict,
     )
 
 
@@ -290,6 +295,7 @@ def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str
         sync_token = run_bridge_command(
             client, room_id, f"{TELEGRAM_SET_RELAY_COMMAND} {TELEGRAM_RELAY_LOGIN_ID}",
             TELEGRAM_BOT_MXID, sync_token,
+            require_substring=RELAY_SUCCESS_MARKER, strict=True,
         )
 
     client.set_state_event(
