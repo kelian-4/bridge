@@ -161,15 +161,37 @@ for kind in signal whatsapp telegram; do
 done
 case "$(env_get INVITER_USER_ID)" in @inviter:*|"") env_set INVITER_USER_ID "@whatsappbot:$SERVER_NAME";; *":$SERVER_NAME") ;; *) env_set INVITER_USER_ID "@whatsappbot:$SERVER_NAME";; esac
 
+TELEGRAM_ON=0
+if [ "$(env_get TELEGRAM_ENABLED)" != 0 ]; then
+  tg_id="$(env_get TELEGRAM_API_ID)"
+  tg_hash="$(env_get TELEGRAM_API_HASH)"
+  if is_placeholder "$tg_id" || is_placeholder "$tg_hash"; then
+    if [ -t 0 ] && [ "${SETUP_YES:-}" != 1 ] && [ "${SETUP_TELEGRAM:-}" != 0 ] && confirm "Activer Telegram ?"; then
+      tg_id="$(ask TELEGRAM_API_ID "Telegram api_id : " '^[0-9]+$')"
+      tg_hash="$(ask TELEGRAM_API_HASH "Telegram api_hash : " '^[0-9a-fA-F]{32}$')"
+      env_set TELEGRAM_API_ID "$tg_id"
+      env_set TELEGRAM_API_HASH "$tg_hash"
+    elif [ -t 0 ] && [ "${SETUP_YES:-}" != 1 ] && [ "${SETUP_TELEGRAM:-}" != 0 ]; then
+      env_set TELEGRAM_ENABLED 0
+      say "telegram ignoré"
+    fi
+  fi
+  if ! is_placeholder "$(env_get TELEGRAM_API_ID)" && ! is_placeholder "$(env_get TELEGRAM_API_HASH)"; then
+    TELEGRAM_ON=1
+    env_set TELEGRAM_ENABLED 1
+  fi
+fi
+
 PROJECT="$(basename "$PWD" | tr '[:upper:]' '[:lower:]')"
-SERVICES=(postgres synapse mautrix-signal mautrix-whatsapp auto-bridge-signal)
+SERVICES=(postgres synapse mautrix-signal mautrix-whatsapp mautrix-telegram auto-bridge-signal auto-bridge-telegram)
 profile_of() {
   case "$1" in
     postgres) echo local-postgres;;
     synapse) echo local-synapse;;
     mautrix-signal) echo local-signal;;
     mautrix-whatsapp) echo local-whatsapp;;
-    auto-bridge-signal) echo local-auto-bridge;;
+    mautrix-telegram) echo local-telegram;;
+    auto-bridge-signal|auto-bridge-telegram) echo local-auto-bridge;;
   esac
 }
 is_stable_running() {
@@ -207,6 +229,7 @@ fi
 img() { local v; v="$(env_get "$1")"; if [ -n "$v" ]; then echo "$v"; else echo "$2"; fi; }
 SIGNAL_IMG="$(img SIGNAL_IMAGE dock.mau.dev/mautrix/signal:latest)"
 WHATSAPP_IMG="$(img WHATSAPP_IMAGE dock.mau.dev/mautrix/whatsapp:latest)"
+TELEGRAM_IMG="$(img TELEGRAM_IMAGE dock.mau.dev/mautrix/telegram:latest)"
 SYNAPSE_IMG="$(img SYNAPSE_IMAGE matrixdotorg/synapse:latest)"
 POSTGRES_IMG="$(img POSTGRES_IMAGE postgres:16-alpine)"
 
@@ -240,7 +263,7 @@ pull_image() {
   case "$host" in *.*|*:*) ;; *) host="registry-1.docker.io";; esac
   say "Image indisponible : $image"
   diagnose_registry "$host"
-  die "images : définis SIGNAL_IMAGE, WHATSAPP_IMAGE, SYNAPSE_IMAGE ou POSTGRES_IMAGE dans .env"
+  die "images : définis SIGNAL_IMAGE, WHATSAPP_IMAGE, TELEGRAM_IMAGE, SYNAPSE_IMAGE ou POSTGRES_IMAGE dans .env"
 }
 
 pull_image "$YQ_IMAGE"
@@ -248,7 +271,8 @@ pull_image "$YQ_IMAGE"
 [ "${EXT[synapse]}" = 1 ] || pull_image "$SYNAPSE_IMG"
 [ "${EXT[mautrix-signal]}" = 1 ] || pull_image "$SIGNAL_IMG"
 [ "${EXT[mautrix-whatsapp]}" = 1 ] || pull_image "$WHATSAPP_IMG"
-[ "${EXT[auto-bridge-signal]}" = 1 ] || pull_image "python:3.12-slim"
+if [ "$TELEGRAM_ON" = 1 ] && [ "${EXT[mautrix-telegram]}" = 0 ]; then pull_image "$TELEGRAM_IMG"; fi
+if [ "${EXT[auto-bridge-signal]}" = 0 ] || { [ "$TELEGRAM_ON" = 1 ] && [ "${EXT[auto-bridge-telegram]}" = 0 ]; }; then pull_image "python:3.12-slim"; fi
 
 PG_PW_FILE="secrets/postgres_password.txt"
 NEED_PG_PW=0
@@ -265,7 +289,9 @@ if [ "$NEED_PG_PW" = 1 ] && is_placeholder "$(env_get POSTGRES_PASSWORD)"; then
   fi
 fi
 
-for v in REGISTRATION_SHARED_SECRET MACAROON_SECRET_KEY FORM_SECRET SIGNAL_AS_TOKEN SIGNAL_HS_TOKEN WHATSAPP_AS_TOKEN WHATSAPP_HS_TOKEN; do
+secret_keys=(REGISTRATION_SHARED_SECRET MACAROON_SECRET_KEY FORM_SECRET SIGNAL_AS_TOKEN SIGNAL_HS_TOKEN WHATSAPP_AS_TOKEN WHATSAPP_HS_TOKEN)
+if [ "$TELEGRAM_ON" = 1 ]; then secret_keys+=(TELEGRAM_AS_TOKEN TELEGRAM_HS_TOKEN); fi
+for v in "${secret_keys[@]}"; do
   env_gen "$v"
 done
 env_set COMPOSE_PROFILES "$PROFILES_VALUE"
@@ -284,6 +310,7 @@ fi
 
 ln -sfn ../.env .env
 mkdir -p secrets synapse mautrix-signal mautrix-whatsapp
+if [ "$TELEGRAM_ON" = 1 ]; then mkdir -p mautrix-telegram; fi
 chmod 700 secrets
 write_secret() { printf '%s' "$2" > "secrets/$1"; chmod "${3:-644}" "secrets/$1"; }
 if [ -n "$PG_PW" ]; then
@@ -295,6 +322,7 @@ fi
 write_secret registration_shared_secret "$REGISTRATION_SHARED_SECRET"
 write_secret macaroon_secret_key "$MACAROON_SECRET_KEY"
 write_secret form_secret "$FORM_SECRET"
+[ -e secrets/telegram_registration ] || write_secret telegram_registration ""
 
 "${DOCKER[@]}" network inspect bridgenet >/dev/null 2>&1 || "${DOCKER[@]}" network create bridgenet >/dev/null
 for c in "${SERVICES[@]}"; do
@@ -319,10 +347,11 @@ fix_owner() {
 }
 fix_owner mautrix-signal
 fix_owner mautrix-whatsapp
+if [ "$TELEGRAM_ON" = 1 ]; then fix_owner mautrix-telegram; fi
 fix_owner synapse
 
 yq_run() {
-  "${DOCKER[@]}" run --rm -u "$MYUID:$MYGID" -v "$PWD:/workdir" -e "ADMIN_MXID=${ADMIN_MXID:-}" -e "AS_EFF=${AS_EFF:-}" -e "HS_EFF=${HS_EFF:-}" "$YQ_IMAGE" "$@"
+  "${DOCKER[@]}" run --rm -u "$MYUID:$MYGID" -v "$PWD:/workdir" -e "ADMIN_MXID=${ADMIN_MXID:-}" -e "SERVER_NAME=${SERVER_NAME:-}" -e "AS_EFF=${AS_EFF:-}" -e "HS_EFF=${HS_EFF:-}" "$YQ_IMAGE" "$@"
 }
 
 reg_token() { grep -m1 -E "^\s*$2:" "$1" | sed -E 's/^[^:]*:\s*//; s/^["\x27]|["\x27]$//g' | tr -d '\n'; }
@@ -366,9 +395,36 @@ sync_synapse_registration() {
   fi
 }
 
-reg_sum() { { cat secrets/signal_registration secrets/whatsapp_registration 2>/dev/null || true; } | sha256sum | cut -d' ' -f1; }
+reg_sum() { { cat secrets/signal_registration secrets/whatsapp_registration secrets/telegram_registration 2>/dev/null || true; } | sha256sum | cut -d' ' -f1; }
+prep_telegram_config() {
+  local cfg=mautrix-telegram/config.yaml
+  if [ ! -s "$cfg" ]; then
+    quiet "${DOCKER[@]}" run --rm -u "$MYUID:$MYGID" -v "$PWD/mautrix-telegram:/data" \
+      --entrypoint /usr/bin/mautrix-telegram "$TELEGRAM_IMG" -e -c /data/config.yaml || die "config telegram impossible"
+    [ -s "$cfg" ] || die "config telegram absente"
+    say "Configuration telegram créée"
+  fi
+  quiet yq_run -i '
+    .homeserver.address = "http://synapse:8008" |
+    .homeserver.domain = strenv(SERVER_NAME) |
+    .appservice.address = "http://mautrix-telegram:29317" |
+    .appservice.hostname = "0.0.0.0" |
+    .appservice.port = 29317 |
+    .appservice.id = "telegram" |
+    .appservice.bot.username = "telegrambot" |
+    .appservice.username_template = "telegram_{{.}}" |
+    .database.type = "sqlite3-fk-wal" |
+    .database.uri = "file:/data/mautrix-telegram.db?_txlock=immediate" |
+    .env_config_prefix = "BRIDGE_" |
+    .bridge.command_prefix = "!tg" |
+    .bridge.relay.enabled = true |
+    .bridge.permissions = {"*": "relay"} |
+    .bridge.permissions[strenv(SERVER_NAME)] = "user"
+  ' "$cfg" || die "config telegram illisible"
+}
+
 REG_BEFORE="$(reg_sum)"
-cfg_sum() { { cat mautrix-signal/config.yaml mautrix-whatsapp/config.yaml 2>/dev/null || true; } | sha256sum | cut -d' ' -f1; }
+cfg_sum() { { cat mautrix-signal/config.yaml mautrix-whatsapp/config.yaml mautrix-telegram/config.yaml 2>/dev/null || true; } | sha256sum | cut -d' ' -f1; }
 CFG_BEFORE="$(cfg_sum)"
 
 if [ "${EXT[mautrix-signal]}" = 0 ]; then
@@ -376,6 +432,11 @@ if [ "${EXT[mautrix-signal]}" = 0 ]; then
 fi
 if [ "${EXT[mautrix-whatsapp]}" = 0 ]; then
   gen_registration mautrix-whatsapp mautrix-whatsapp "$WHATSAPP_IMG" "$WHATSAPP_AS_TOKEN" "$WHATSAPP_HS_TOKEN" whatsapp_registration whatsapp
+fi
+
+if [ "$TELEGRAM_ON" = 1 ] && [ "${EXT[mautrix-telegram]}" = 0 ]; then
+  prep_telegram_config
+  gen_registration mautrix-telegram mautrix-telegram "$TELEGRAM_IMG" "$TELEGRAM_AS_TOKEN" "$TELEGRAM_HS_TOKEN" telegram_registration telegram
 fi
 
 REG_CHANGED=0
@@ -391,6 +452,11 @@ if [ "${EXT[synapse]}" = 0 ]; then
   [ -f synapse/homeserver.yaml ] || die "synapse/homeserver.yaml absent"
   sync_synapse_registration signal-registration.yaml signal_registration
   sync_synapse_registration whatsapp-registration.yaml whatsapp_registration
+  if [ "$TELEGRAM_ON" = 1 ] && ! grep -q '/run/secrets/telegram_registration' synapse/homeserver.yaml; then
+    quiet yq_run -i '.app_service_config_files += ["/run/secrets/telegram_registration"]' synapse/homeserver.yaml || die "homeserver.yaml illisible"
+    if git rev-parse --git-dir >/dev/null 2>&1; then git update-index --skip-worktree synapse/homeserver.yaml 2>/dev/null || true; fi
+    REG_CHANGED=1
+  fi
   for r in signal_registration whatsapp_registration; do
     [ -f "secrets/$r" ] || die "secrets/$r absent"
   done
@@ -402,9 +468,10 @@ if [ "${EXT[synapse]}" = 0 ]; then
   fi
 fi
 
-if [ "${EXT[mautrix-signal]}" = 0 ] || [ "${EXT[mautrix-whatsapp]}" = 0 ]; then
+if [ "${EXT[mautrix-signal]}" = 0 ] || [ "${EXT[mautrix-whatsapp]}" = 0 ] || [ "$TELEGRAM_ON" = 1 ]; then
   if git rev-parse --git-dir >/dev/null 2>&1; then
     git update-index --skip-worktree mautrix-signal/config.yaml mautrix-whatsapp/config.yaml 2>/dev/null || true
+    if [ "$TELEGRAM_ON" = 1 ]; then git update-index --skip-worktree mautrix-telegram/config.yaml 2>/dev/null || true; fi
   fi
 fi
 
@@ -419,7 +486,7 @@ our_running() {
 
 if command -v systemctl >/dev/null 2>&1; then
   active=()
-  for u in matrix-synapse postgresql mautrix-signal mautrix-whatsapp; do
+  for u in matrix-synapse postgresql mautrix-signal mautrix-whatsapp mautrix-telegram; do
     if systemctl is-active --quiet "$u" 2>/dev/null; then active+=("$u"); fi
   done
   if [ "${#active[@]}" -gt 0 ]; then
@@ -453,16 +520,18 @@ up_services=()
 for c in postgres synapse mautrix-signal mautrix-whatsapp; do
   if [ "${EXT[$c]}" = 0 ]; then up_services+=("$c"); fi
 done
+if [ "$TELEGRAM_ON" = 1 ] && [ "${EXT[mautrix-telegram]}" = 0 ]; then up_services+=(mautrix-telegram); fi
 pre_existing=()
-for c in synapse mautrix-signal mautrix-whatsapp; do
+for c in synapse mautrix-signal mautrix-whatsapp mautrix-telegram; do
   if "${DOCKER[@]}" inspect "$c" >/dev/null 2>&1; then pre_existing+=("$c"); fi
 done
 if [ "${#up_services[@]}" -gt 0 ]; then
   say "Démarrage : ${up_services[*]}"
   quiet "${DOCKER[@]}" compose up -d "${up_services[@]}" || die "démarrage impossible"
   recreate=()
-  for c in synapse mautrix-signal mautrix-whatsapp; do
+  for c in synapse mautrix-signal mautrix-whatsapp mautrix-telegram; do
     [ "${EXT[$c]}" = 0 ] || continue
+    if [ "$c" = mautrix-telegram ] && [ "$TELEGRAM_ON" != 1 ]; then continue; fi
     case " ${pre_existing[*]-} " in *" $c "*) ;; *) continue;; esac
     if [ "$c" = synapse ] && [ "$REG_CHANGED" = 1 ]; then recreate+=("$c"); fi
     if [ "$c" != synapse ] && [ "$CFG_CHANGED" = 1 ]; then recreate+=("$c"); fi
@@ -496,19 +565,36 @@ if out="$(gettoken --user "$INVITER_USER_ID" --env-key INVITER_ACCESS_TOKEN 2>/d
 
 connect_bridge() {
   local kind="$1" upper
+  shift
   upper="$(printf '%s' "$kind" | tr a-z A-Z)"
-  if [ "$(env_get "${upper}_CONNECTED")" = 1 ]; then say "$kind déjà connecté"; return 0; fi
+  if [ "$kind" = telegram ]; then
+    if ! is_placeholder "$(env_get TELEGRAM_RELAY_LOGIN_ID)"; then say "telegram déjà connecté"; return 0; fi
+  elif [ "$(env_get "${upper}_CONNECTED")" = 1 ]; then say "$kind déjà connecté"; return 0; fi
   [ "${SETUP_SKIP_LOGIN:-}" = 1 ] && return 0
   if [ -n "${SETUP_BRIDGES:-}" ]; then
     case ",$SETUP_BRIDGES," in *",$kind,"*) ;; *) say "$kind ignoré"; return 0;; esac
   else
-    if [ ! -t 0 ]; then say "$kind à connecter : ./with-env.sh python3 script/server/bridge_login.py $kind"; return 0; fi
+    if [ ! -t 0 ]; then say "$kind à connecter : ./with-env.sh python3 script/server/bridge_login.py $kind $*"; return 0; fi
     confirm "Connecter $kind ?" || { say "$kind ignoré"; return 0; }
   fi
-  MATRIX_ACCESS_TOKEN="$(env_get MATRIX_ACCESS_TOKEN)" py ../script/server/bridge_login.py "$kind" --homeserver "$HS_URL" --env-file "$ENV_FILE" || say "$kind non connecté"
+  MATRIX_ACCESS_TOKEN="$(env_get MATRIX_ACCESS_TOKEN)" py ../script/server/bridge_login.py "$kind" "$@" --homeserver "$HS_URL" --env-file "$ENV_FILE" || say "$kind non connecté"
 }
 connect_bridge signal
 connect_bridge whatsapp
+if [ "$TELEGRAM_ON" = 1 ]; then
+  connect_bridge telegram --relay
+  if is_placeholder "$(env_get TELEGRAM_GHOSTS_TO_INVITE)"; then
+    tg_user="${TELEGRAM_USER_ID:-}"
+    if [ -z "$tg_user" ] && [ -t 0 ] && [ "${SETUP_YES:-}" != 1 ]; then
+      tg_user="$(ask TELEGRAM_USER_ID "Identifiant Telegram numérique de ton compte : " '^[0-9]+$')"
+    fi
+    if [ -n "$tg_user" ]; then
+      env_set TELEGRAM_GHOSTS_TO_INVITE "@telegram_$tg_user:$SERVER_NAME"
+    else
+      say "TELEGRAM_GHOSTS_TO_INVITE à renseigner dans .env"
+    fi
+  fi
+fi
 
 relay="$(env_get SIGNAL_RELAY_LOGIN_ID)"
 if [ "${EXT[auto-bridge-signal]}" = 0 ]; then
@@ -517,6 +603,15 @@ if [ "${EXT[auto-bridge-signal]}" = 0 ]; then
     say "auto-bridge-signal démarré"
   else
     say "auto-bridge-signal en attente de la connexion signal"
+  fi
+fi
+
+if [ "$TELEGRAM_ON" = 1 ] && [ "${EXT[auto-bridge-telegram]}" = 0 ]; then
+  if ! is_placeholder "$(env_get TELEGRAM_RELAY_LOGIN_ID)" && ! is_placeholder "$(env_get TELEGRAM_GHOSTS_TO_INVITE)"; then
+    quiet "${DOCKER[@]}" compose up -d --force-recreate auto-bridge-telegram || die "auto-bridge-telegram impossible"
+    say "auto-bridge-telegram démarré"
+  else
+    say "auto-bridge-telegram en attente de la connexion telegram"
   fi
 fi
 

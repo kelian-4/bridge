@@ -49,6 +49,7 @@ services:
       - form_secret
       - signal_registration
       - whatsapp_registration
+      - telegram_registration
     volumes:
       - ./synapse:/data
     networks:
@@ -98,6 +99,27 @@ services:
     networks:
       - bridgenet
 
+  mautrix-telegram:
+    image: ${TELEGRAM_IMAGE:-dock.mau.dev/mautrix/telegram:latest}
+    profiles: ["local-telegram"]
+    container_name: mautrix-telegram
+    restart: unless-stopped
+    depends_on:
+      synapse:
+        condition: service_started
+        required: false
+    environment:
+      BRIDGE_APPSERVICE__AS_TOKEN: ${TELEGRAM_AS_TOKEN:-}
+      BRIDGE_APPSERVICE__HS_TOKEN: ${TELEGRAM_HS_TOKEN:-}
+      BRIDGE_NETWORK__API_ID: ${TELEGRAM_API_ID:-}
+      BRIDGE_NETWORK__API_HASH: ${TELEGRAM_API_HASH:-}
+      UID: ${HOST_UID:-1337}
+      GID: ${HOST_GID:-1337}
+    volumes:
+      - ./mautrix-telegram:/data
+    networks:
+      - bridgenet
+
   auto-bridge-signal:
     build: ./auto-bridge
     profiles: ["local-auto-bridge"]
@@ -119,6 +141,30 @@ services:
       - ../script/server:/app:ro
       - auto_bridge_state:/state
 
+  auto-bridge-telegram:
+    build: ./auto-bridge
+    profiles: ["local-auto-bridge"]
+    container_name: auto-bridge-telegram
+    restart: unless-stopped
+    depends_on:
+      synapse:
+        condition: service_started
+        required: false
+      mautrix-telegram:
+        condition: service_started
+        required: false
+    env_file:
+      - ../.env
+    network_mode: host
+    command: ["auto_bridge.py"]
+    environment:
+      SYNC_TOKEN_FILE: /state/telegram_next_batch
+      REQUIRED_VARS: MATRIX_ACCESS_TOKEN TELEGRAM_RELAY_LOGIN_ID
+      SERVICE_NAME: auto-bridge-telegram
+    volumes:
+      - ../script/server:/app:ro
+      - auto_bridge_state:/state
+
 volumes:
   auto_bridge_state:
 
@@ -135,3 +181,5 @@ secrets:
     file: ./secrets/signal_registration
   whatsapp_registration:
     file: ./secrets/whatsapp_registration
+  telegram_registration:
+    file: ./secrets/telegram_registration

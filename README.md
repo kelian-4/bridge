@@ -1,6 +1,6 @@
 # bridge
 
-Stack Matrix auto-hébergée qui relie **WhatsApp** et **Signal** grâce à [mautrix](https://docs.mau.fi/bridges/). Un seul client Matrix (Element, etc.) permet de lire et d'écrire dans les deux messageries, et les conversations WhatsApp sont automatiquement répliquées côté Signal. **Telegram** est prévu (voir [Feuille de route](#feuille-de-route)).
+Stack Matrix auto-hébergée qui relie **WhatsApp** et **Signal** grâce à [mautrix](https://docs.mau.fi/bridges/). Un seul client Matrix (Element, etc.) permet de lire et d'écrire dans les deux messageries, et les conversations WhatsApp sont automatiquement répliquées côté Signal. **Telegram** est optionnel (voir [Telegram](#telegram)).
 
 ```
  WhatsApp ──► mautrix-whatsapp ─┐
@@ -132,10 +132,29 @@ docker compose -f Docker/docker-compose.yml logs -f auto-bridge-signal
 - `pg_to_sqlite.py` convertit une base Postgres Synapse en SQLite (requiert `PG_DSN` et `psycopg2`) ;
 - `fix_sqlite_constraints.py` recrée les contraintes UNIQUE / PRIMARY KEY manquantes après la conversion.
 
-## Feuille de route
+## Telegram
 
-- **Telegram** : ajouter `mautrix-telegram` à `Docker/docker-compose.yml` (service, profile `local-telegram`, base `mautrix_telegram`, registration et tokens générés par `setup.sh`).
-- Étendre `setup.sh` : `connect_bridge telegram` et variables `TELEGRAM_AS_TOKEN` / `TELEGRAM_HS_TOKEN`.
-- Définir le comportement de l'auto-bridge pour Telegram (équivalent du relais Signal).
- 
-Déjà en place pour Telegram : le module NixOS, `TELEGRAM_BOT_MXID`, `bridge_login.py telegram` et `unbridge_telegram.py`.
+Optionnel : `setup.sh` propose de l'activer et demande `api_id` et `api_hash` (obtenus sur my.telegram.org). Ils sont stockés dans `.env` (`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`) ; `TELEGRAM_ENABLED=0` désactive la question.
+
+Le bridge est `mautrix-telegram` en Go (bridgev2). Il crée uniquement des **groupes Telegram normaux**, privés : sans lien public ni nom d'utilisateur, accessibles seulement à leurs participants.
+
+Deux comptes Telegram interviennent :
+
+- le compte relais, connecté par QR code (`bridge_login.py telegram --relay`), qui crée les groupes et relaie les messages WhatsApp. Un bot ne peut pas créer de groupe, il faut un vrai compte ;
+- ton compte personnel, ajouté comme participant via `TELEGRAM_GHOSTS_TO_INVITE` (`@telegram_<identifiant numérique>:domaine`). `setup.sh` demande l'identifiant, ou lit `TELEGRAM_USER_ID`.
+
+Pour chaque nouveau salon WhatsApp, le service `auto-bridge-telegram` (`auto_bridge.py`) :
+
+1. invite `@telegrambot` ;
+2. lance `!wa set-relay` côté WhatsApp ;
+3. invite les participants Telegram ;
+4. lance `!tg create-group group` ;
+5. lance `!tg set-relay <TELEGRAM_RELAY_LOGIN_ID>`.
+
+Le service démarre quand `TELEGRAM_RELAY_LOGIN_ID` et `TELEGRAM_GHOSTS_TO_INVITE` sont renseignés.
+
+```bash
+docker compose -f Docker/docker-compose.yml logs -f auto-bridge-telegram
+```
+
+La config de `mautrix-telegram` est générée par l'image au premier lancement puis ajustée par `setup.sh`. Elle n'est pas versionnée.

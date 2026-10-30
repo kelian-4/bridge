@@ -18,6 +18,7 @@ DEFAULT_BOTS = {"whatsapp": "whatsappbot", "signal": "signalbot", "telegram": "t
 UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 SUCCESS_RE = re.compile(r"successfully logged in", re.I)
 FAILURE_RE = re.compile(r"login failed|failed to log ?in", re.I)
+TELEGRAM_ID_RES = (re.compile(r"`(\d{5,})`"), re.compile(r"\((\d{5,})\)"))
 
 
 class Client:
@@ -117,6 +118,34 @@ def write_env_value(path, key, value):
     p.write_text("\n".join(out) + "\n")
 
 
+def telegram_login_id(text):
+    for rx in TELEGRAM_ID_RES:
+        found = rx.search(text)
+        if found:
+            return found.group(1)
+    return None
+
+
+def fetch_login_id(client, room, bot, since, parse, timeout=30):
+    sent = client.send(room, "list-logins")
+    seen = False
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        data = client.sync(since, 5000)
+        since = data["next_batch"]
+        events = data.get("rooms", {}).get("join", {}).get(room, {}).get("timeline", {}).get("events", [])
+        for ev in events:
+            if ev.get("event_id") == sent:
+                seen = True
+                continue
+            if not seen or ev.get("sender") != bot or ev.get("type") != "m.room.message":
+                continue
+            found = parse(event_content(ev).get("body", ""))
+            if found:
+                return found
+    return None
+
+
 def event_content(event):
     content = event.get("content", {})
     rel = content.get("m.relates_to", {})
@@ -152,6 +181,7 @@ def main():
     ap.add_argument("--token", default=os.environ.get("MATRIX_ACCESS_TOKEN", ""))
     ap.add_argument("--env-file", default=".env")
     ap.add_argument("--timeout", type=int, default=600, help="durée maximale en secondes (défaut : 600)")
+    ap.add_argument("--relay", action="store_true", help="enregistre ce compte comme compte relais (telegram)")
     ap.add_argument("--debug", action="store_true", help="affiche chaque évènement reçu (diagnostic)")
     args = ap.parse_args()
 
@@ -257,6 +287,13 @@ def main():
     if kind in DEFAULT_BOTS:
         write_env_value(args.env_file, kind.upper() + "_CONNECTED", "1")
     found = UUID_RE.search(result[1])
+    if kind == "telegram" and args.relay:
+        login_id = telegram_login_id(result[1]) or fetch_login_id(client, room, bot, since, telegram_login_id)
+        if login_id:
+            write_env_value(args.env_file, "TELEGRAM_RELAY_LOGIN_ID", login_id)
+            print("TELEGRAM_RELAY_LOGIN_ID enregistré")
+        else:
+            print("TELEGRAM_RELAY_LOGIN_ID introuvable, renseigne-le dans .env")
     if kind == "signal" and found:
         current = read_env_value(args.env_file, "SIGNAL_RELAY_LOGIN_ID")
         login_id = found.group(0)

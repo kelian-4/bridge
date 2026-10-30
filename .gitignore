@@ -11,6 +11,7 @@ Docker/secrets/
 *.db-shm
 *.sql
 Docker/postgres-data/
+Docker/mautrix-telegram/
 Docker/synapse/media_store/
 
 # fichiers parasites
