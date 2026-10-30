@@ -287,13 +287,14 @@ def main():
     if kind in DEFAULT_BOTS and not args.relay:
         write_env_value(args.env_file, kind.upper() + "_CONNECTED", "1")
     found = UUID_RE.search(result[1])
-    if kind == "telegram" and args.relay:
+    if kind == "telegram":
+        env_key = "TELEGRAM_RELAY_LOGIN_ID" if args.relay else "TELEGRAM_MAIN_LOGIN_ID"
         login_id = telegram_login_id(result[1]) or fetch_login_id(client, room, bot, since, telegram_login_id)
         if login_id:
-            write_env_value(args.env_file, "TELEGRAM_RELAY_LOGIN_ID", login_id)
-            print("TELEGRAM_RELAY_LOGIN_ID enregistré")
+            write_env_value(args.env_file, env_key, login_id)
+            print(f"{env_key} enregistré")
         else:
-            print("TELEGRAM_RELAY_LOGIN_ID introuvable, renseigne-le dans .env")
+            print(f"{env_key} introuvable, renseigne-le dans .env")
     if kind == "signal" and found:
         current = read_env_value(args.env_file, "SIGNAL_RELAY_LOGIN_ID")
         login_id = found.group(0)

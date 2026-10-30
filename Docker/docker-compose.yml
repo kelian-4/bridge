@@ -159,7 +159,7 @@ services:
     command: ["auto_bridge.py"]
     environment:
       SYNC_TOKEN_FILE: /state/telegram_next_batch
-      REQUIRED_VARS: MATRIX_ACCESS_TOKEN TELEGRAM_RELAY_LOGIN_ID
+      REQUIRED_VARS: MATRIX_ACCESS_TOKEN TELEGRAM_RELAY_LOGIN_ID TELEGRAM_MAIN_LOGIN_ID
       SERVICE_NAME: auto-bridge-telegram
     volumes:
       - ../script/server:/app:ro

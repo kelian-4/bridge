@@ -599,7 +599,7 @@ if [ "${EXT[auto-bridge-signal]}" = 0 ]; then
 fi
 
 if [ "$TELEGRAM_ON" = 1 ] && [ "${EXT[auto-bridge-telegram]}" = 0 ]; then
-  if ! is_placeholder "$(env_get TELEGRAM_RELAY_LOGIN_ID)"; then
+  if ! is_placeholder "$(env_get TELEGRAM_RELAY_LOGIN_ID)" && ! is_placeholder "$(env_get TELEGRAM_MAIN_LOGIN_ID)"; then
     quiet "${DOCKER[@]}" compose up -d --force-recreate auto-bridge-telegram || die "auto-bridge-telegram impossible"
     say "auto-bridge-telegram démarré"
   else

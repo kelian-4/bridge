@@ -24,6 +24,11 @@ TELEGRAM_RELAY_GHOST_MXID = os.environ.get(
     "TELEGRAM_RELAY_GHOST_MXID",
     f"@telegram_{TELEGRAM_RELAY_LOGIN_ID}:{DOMAIN}" if TELEGRAM_RELAY_LOGIN_ID else "",
 )
+TELEGRAM_MAIN_LOGIN_ID = os.environ.get("TELEGRAM_MAIN_LOGIN_ID", "").strip()
+TELEGRAM_MAIN_GHOST_MXID = os.environ.get(
+    "TELEGRAM_MAIN_GHOST_MXID",
+    f"@telegram_{TELEGRAM_MAIN_LOGIN_ID}:{DOMAIN}" if TELEGRAM_MAIN_LOGIN_ID else "",
+)
 TELEGRAM_GHOSTS_TO_INVITE = [
     g.strip() for g in os.environ.get("TELEGRAM_GHOSTS_TO_INVITE", "").split(",") if g.strip()
 ]
@@ -273,7 +278,7 @@ def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str
     sync_token = run_bridge_command(client, room_id, "!wa set-relay", WHATSAPP_BOT_MXID, sync_token)
 
     invited: list[str] = []
-    for ghost in [*TELEGRAM_GHOSTS_TO_INVITE, TELEGRAM_RELAY_GHOST_MXID]:
+    for ghost in [TELEGRAM_MAIN_GHOST_MXID, *TELEGRAM_GHOSTS_TO_INVITE, TELEGRAM_RELAY_GHOST_MXID]:
         if not ghost or ghost == TELEGRAM_BOT_MXID or ghost in invited:
             continue
         log.info("Invitation de %s", ghost)
