@@ -27,7 +27,10 @@ TELEGRAM_RELAY_GHOST_MXID = os.environ.get(
 TELEGRAM_GHOSTS_TO_INVITE = [
     g.strip() for g in os.environ.get("TELEGRAM_GHOSTS_TO_INVITE", "").split(",") if g.strip()
 ]
-TELEGRAM_GROUP_COMMAND = os.environ.get("TELEGRAM_GROUP_COMMAND", "!tg create-group group")
+TELEGRAM_GROUP_COMMAND = os.environ.get(
+    "TELEGRAM_GROUP_COMMAND",
+    f"!tg create-group {TELEGRAM_RELAY_LOGIN_ID} group" if TELEGRAM_RELAY_LOGIN_ID else "!tg create-group group",
+)
 TELEGRAM_SET_RELAY_COMMAND = os.environ.get("TELEGRAM_SET_RELAY_COMMAND", "!tg set-relay")
 
 BOT_RESPONSE_TIMEOUT = int(os.environ.get("BOT_RESPONSE_TIMEOUT", "30"))
