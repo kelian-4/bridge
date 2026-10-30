@@ -181,7 +181,7 @@ def main():
     ap.add_argument("--token", default=os.environ.get("MATRIX_ACCESS_TOKEN", ""))
     ap.add_argument("--env-file", default=".env")
     ap.add_argument("--timeout", type=int, default=600, help="durée maximale en secondes (défaut : 600)")
-    ap.add_argument("--relay", action="store_true", help="enregistre ce compte comme compte relais (telegram)")
+    ap.add_argument("--relay", action="store_true", help="connecte le compte relais et enregistre son identifiant (telegram)")
     ap.add_argument("--debug", action="store_true", help="affiche chaque évènement reçu (diagnostic)")
     args = ap.parse_args()
 
@@ -284,7 +284,7 @@ def main():
     if result[0] == "echec":
         return 1
     print("Connexion réussie")
-    if kind in DEFAULT_BOTS:
+    if kind in DEFAULT_BOTS and not args.relay:
         write_env_value(args.env_file, kind.upper() + "_CONNECTED", "1")
     found = UUID_RE.search(result[1])
     if kind == "telegram" and args.relay:

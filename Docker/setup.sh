@@ -564,36 +564,28 @@ INVITER_USER_ID="$(env_get INVITER_USER_ID)"
 if out="$(gettoken --user "$INVITER_USER_ID" --env-key INVITER_ACCESS_TOKEN 2>/dev/null)"; then say "$out"; else say "Token INVITER_ACCESS_TOKEN indisponible"; fi
 
 connect_bridge() {
-  local kind="$1" upper
+  local kind="$1" label upper is_relay=0
   shift
   upper="$(printf '%s' "$kind" | tr a-z A-Z)"
-  if [ "$kind" = telegram ]; then
-    if ! is_placeholder "$(env_get TELEGRAM_RELAY_LOGIN_ID)"; then say "telegram déjà connecté"; return 0; fi
-  elif [ "$(env_get "${upper}_CONNECTED")" = 1 ]; then say "$kind déjà connecté"; return 0; fi
+  label="$kind"
+  case " $* " in *" --relay "*) is_relay=1; label="$kind relais";; esac
+  if [ "$is_relay" = 1 ]; then
+    if ! is_placeholder "$(env_get "${upper}_RELAY_LOGIN_ID")"; then say "$label déjà connecté"; return 0; fi
+  elif [ "$(env_get "${upper}_CONNECTED")" = 1 ]; then say "$label déjà connecté"; return 0; fi
   [ "${SETUP_SKIP_LOGIN:-}" = 1 ] && return 0
   if [ -n "${SETUP_BRIDGES:-}" ]; then
-    case ",$SETUP_BRIDGES," in *",$kind,"*) ;; *) say "$kind ignoré"; return 0;; esac
+    case ",$SETUP_BRIDGES," in *",$kind,"*) ;; *) say "$label ignoré"; return 0;; esac
   else
-    if [ ! -t 0 ]; then say "$kind à connecter : ./with-env.sh python3 script/server/bridge_login.py $kind $*"; return 0; fi
-    confirm "Connecter $kind ?" || { say "$kind ignoré"; return 0; }
+    if [ ! -t 0 ]; then say "$label à connecter : ./with-env.sh python3 script/server/bridge_login.py $kind $*"; return 0; fi
+    confirm "Connecter $label ?" || { say "$label ignoré"; return 0; }
   fi
-  MATRIX_ACCESS_TOKEN="$(env_get MATRIX_ACCESS_TOKEN)" py ../script/server/bridge_login.py "$kind" "$@" --homeserver "$HS_URL" --env-file "$ENV_FILE" || say "$kind non connecté"
+  MATRIX_ACCESS_TOKEN="$(env_get MATRIX_ACCESS_TOKEN)" py ../script/server/bridge_login.py "$kind" "$@" --homeserver "$HS_URL" --env-file "$ENV_FILE" || say "$label non connecté"
 }
 connect_bridge signal
 connect_bridge whatsapp
 if [ "$TELEGRAM_ON" = 1 ]; then
+  connect_bridge telegram
   connect_bridge telegram --relay
-  if is_placeholder "$(env_get TELEGRAM_GHOSTS_TO_INVITE)"; then
-    tg_user="${TELEGRAM_USER_ID:-}"
-    if [ -z "$tg_user" ] && [ -t 0 ] && [ "${SETUP_YES:-}" != 1 ]; then
-      tg_user="$(ask TELEGRAM_USER_ID "Identifiant Telegram numérique de ton compte : " '^[0-9]+$')"
-    fi
-    if [ -n "$tg_user" ]; then
-      env_set TELEGRAM_GHOSTS_TO_INVITE "@telegram_$tg_user:$SERVER_NAME"
-    else
-      say "TELEGRAM_GHOSTS_TO_INVITE à renseigner dans .env"
-    fi
-  fi
 fi
 
 relay="$(env_get SIGNAL_RELAY_LOGIN_ID)"
@@ -607,7 +599,7 @@ if [ "${EXT[auto-bridge-signal]}" = 0 ]; then
 fi
 
 if [ "$TELEGRAM_ON" = 1 ] && [ "${EXT[auto-bridge-telegram]}" = 0 ]; then
-  if ! is_placeholder "$(env_get TELEGRAM_RELAY_LOGIN_ID)" && ! is_placeholder "$(env_get TELEGRAM_GHOSTS_TO_INVITE)"; then
+  if ! is_placeholder "$(env_get TELEGRAM_RELAY_LOGIN_ID)"; then
     quiet "${DOCKER[@]}" compose up -d --force-recreate auto-bridge-telegram || die "auto-bridge-telegram impossible"
     say "auto-bridge-telegram démarré"
   else
