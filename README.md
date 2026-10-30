@@ -140,8 +140,8 @@ Le bridge est `mautrix-telegram` en Go (bridgev2). Il crée uniquement des **gro
 
 Deux comptes Telegram sont connectés par QR code, comme pour Signal :
 
-- ton compte principal (`bridge_login.py telegram`), dont l'identifiant est enregistré dans `TELEGRAM_MAIN_LOGIN_ID`. Son fantôme est invité dans chaque salon pour être participant du groupe : sans autre membre que le relais, Telegram refuse de créer le groupe ;
-- le compte relais (`bridge_login.py telegram --relay`), qui crée les groupes et relaie les messages WhatsApp. Son identifiant est enregistré dans `TELEGRAM_RELAY_LOGIN_ID`. Un bot ne peut pas créer de groupe, il faut un vrai compte.
+- ton compte principal (`bridge_login.py telegram`), dont l'identifiant est enregistré dans `TELEGRAM_MAIN_LOGIN_ID`. C'est ce compte qui crée les groupes (`!tg create-group <identifiant> group`) ;
+- le compte relais (`bridge_login.py telegram --relay`), qui relaie les messages WhatsApp. Son identifiant est enregistré dans `TELEGRAM_RELAY_LOGIN_ID`. Son fantôme est invité dans chaque salon pour devenir participant du groupe (Telegram refuse un groupe sans autre membre que son créateur).
 
 `TELEGRAM_GHOSTS_TO_INVITE` (liste de MXID de fantômes, séparés par des virgules) reste disponible pour inviter d'autres participants.
 
@@ -149,8 +149,8 @@ Pour chaque nouveau salon WhatsApp, le service `auto-bridge-telegram` (`auto_bri
 
 1. invite `@telegrambot` ;
 2. lance `!wa set-relay` côté WhatsApp ;
-3. invite les fantômes du compte principal et du compte relais ;
-4. lance `!tg create-group group` ;
+3. invite le fantôme du compte relais ;
+4. lance `!tg create-group <TELEGRAM_MAIN_LOGIN_ID> group` ;
 5. lance `!tg set-relay <TELEGRAM_RELAY_LOGIN_ID>`.
 
 Le service démarre quand `TELEGRAM_RELAY_LOGIN_ID` et `TELEGRAM_MAIN_LOGIN_ID` sont renseignés.
