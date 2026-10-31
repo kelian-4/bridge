@@ -163,3 +163,13 @@ docker compose -f Docker/docker-compose.yml logs -f auto-bridge-telegram
 ```
 
 La config de `mautrix-telegram` est générée par l'image au premier lancement puis ajustée par `setup.sh`. Elle n'est pas versionnée.
+
+## Commandes non relayées
+
+Dans un salon bridgé, un message n'est une commande que s'il commence par le préfixe de son propre bridge (`!wa`, `!tg`, `!signal`). Sinon, l'autre bridge le relaie comme un message normal vers WhatsApp, Telegram ou Signal.
+
+Le module `Docker/synapse/modules/command_notice.py` règle ce problème : il transforme en notice (`m.notice`) tout message texte qui commence par l'un de ces préfixes. Le bridge propriétaire exécute toujours la commande, et les bridges ont `bridge_notices: false`, donc aucun ne la relaie. `setup.sh` l'active dans `homeserver.yaml` après avoir vérifié que l'image Synapse le charge.
+
+Le préfixe doit être suivi d'un espace ou de la fin du message : `!wally` et `bonjour !wa` ne sont pas touchés. Les préfixes se changent dans `homeserver.yaml` (`modules`, clé `prefixes`).
+
+Le module ne s'applique qu'au Synapse du dépôt. Un Synapse installé ailleurs doit déclarer le module lui-même.

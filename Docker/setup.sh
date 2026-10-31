@@ -458,6 +458,16 @@ if [ "${EXT[synapse]}" = 0 ]; then
     if git rev-parse --git-dir >/dev/null 2>&1; then git update-index --skip-worktree synapse/homeserver.yaml 2>/dev/null || true; fi
     REG_CHANGED=1
   fi
+  if ! grep -q 'command_notice.CommandNotice' synapse/homeserver.yaml; then
+    if quiet "${DOCKER[@]}" run --rm -v "$PWD/synapse:/data:ro" -e PYTHONPATH=/data/modules --entrypoint python "$SYNAPSE_IMG" -c "import command_notice"; then
+      quiet yq_run -i '.modules += [{"module": "command_notice.CommandNotice", "config": {"prefixes": ["!wa", "!tg", "!signal"]}}]' synapse/homeserver.yaml || die "homeserver.yaml illisible"
+      if git rev-parse --git-dir >/dev/null 2>&1; then git update-index --skip-worktree synapse/homeserver.yaml 2>/dev/null || true; fi
+      REG_CHANGED=1
+      say "Filtre des commandes activé"
+    else
+      say "Filtre des commandes non activé"
+    fi
+  fi
   for r in signal_registration whatsapp_registration; do
     [ -f "secrets/$r" ] || die "secrets/$r absent"
   done

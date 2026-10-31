@@ -40,6 +40,7 @@ services:
     environment:
       SYNAPSE_SERVER_NAME: local.bridge
       SYNAPSE_REPORT_STATS: "no"
+      PYTHONPATH: /data/modules
       PGPASSWORD: ${POSTGRES_PASSWORD}
       UID: ${HOST_UID:-991}
       GID: ${HOST_GID:-991}
