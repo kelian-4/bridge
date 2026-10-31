@@ -418,6 +418,7 @@ prep_telegram_config() {
     .env_config_prefix = "BRIDGE_" |
     .bridge.command_prefix = "!tg" |
     .bridge.relay.enabled = true |
+    .bridge.bridge_notices = false |
     .bridge.permissions = {"*": "relay"} |
     .bridge.permissions[strenv(SERVER_NAME)] = "user"
   ' "$cfg" || die "config telegram illisible"

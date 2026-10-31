@@ -46,6 +46,9 @@ ERROR_KEYWORDS = ("error", "failed", "⚠", "not found", "invalid")
 CREATE_SUCCESS_MARKER = os.environ.get("TELEGRAM_CREATE_MARKER", "successfully created group")
 RELAY_SUCCESS_MARKER = os.environ.get("TELEGRAM_RELAY_MARKER", "will now be relayed")
 CONFIGURED_STATE_TYPE = "fr.kelian.auto_bridge_telegram"
+WHATSAPP_PROTOCOL = os.environ.get("WHATSAPP_PROTOCOL_ID", "whatsapp")
+BRIDGE_INFO_TYPES = ("m.bridge", "uk.half-shot.bridge")
+PROTOCOL_WAIT = int(os.environ.get("PROTOCOL_WAIT", "15"))
 SYNC_TIMEOUT_MS = 30_000
 
 logging.basicConfig(
@@ -63,7 +66,9 @@ class BridgeCommandError(Exception):
 
 
 class BridgeCommandTimeout(Exception):
-    pass
+    def __init__(self, message: str, sync_token: str | None = None) -> None:
+        super().__init__(message)
+        self.sync_token = sync_token
 
 
 class InvalidSyncToken(Exception):
@@ -151,12 +156,12 @@ class MatrixClient:
             return
         resp.raise_for_status()
 
-    def send_message(self, room_id: str, body: str) -> str:
+    def send_message(self, room_id: str, body: str, msgtype: str = "m.text") -> str:
         txn_id = str(time.time_ns())
         resp = self._request(
             "PUT",
             self._url(f"/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn_id}"),
-            json={"msgtype": "m.text", "body": body},
+            json={"msgtype": msgtype, "body": body},
         )
         resp.raise_for_status()
         return resp.json()["event_id"]
@@ -173,6 +178,11 @@ class MatrixClient:
             "PUT", self._url(f"/_matrix/client/v3/rooms/{room_id}/state/{event_type}/{state_key}"), json=content
         )
         resp.raise_for_status()
+
+    def get_room_state(self, room_id: str) -> list[dict[str, Any]]:
+        resp = self._request("GET", self._url(f"/_matrix/client/v3/rooms/{room_id}/state"))
+        resp.raise_for_status()
+        return resp.json()
 
     def get_room_name(self, room_id: str) -> str | None:
         resp = self._request("GET", self._url(f"/_matrix/client/v3/rooms/{room_id}/state/m.room.name/"))
@@ -235,7 +245,7 @@ def wait_for_bot_reply(
                 continue
             return since
     if reply_required:
-        raise BridgeCommandTimeout(f"Pas de réponse de {expected_sender} après {timeout}s")
+        raise BridgeCommandTimeout(f"Pas de réponse de {expected_sender} après {timeout}s", since)
     return since
 
 
@@ -251,7 +261,7 @@ def run_bridge_command(
     timeout: int = BOT_RESPONSE_TIMEOUT,
 ) -> str:
     log.info("> %s", command)
-    client.send_message(room_id, command)
+    client.send_message(room_id, command, "m.notice")
     return wait_for_bot_reply(
         client, room_id, expected_sender, sync_token, timeout=timeout,
         reply_required=reply_required, require_substring=require_substring, strict=strict,
@@ -275,59 +285,107 @@ def set_relay_when_ready(client: MatrixClient, room_id: str, sync_token: str) ->
                 client, room_id, command, TELEGRAM_BOT_MXID, sync_token,
                 require_substring=RELAY_SUCCESS_MARKER, strict=True,
             )
-        except BridgeCommandError as e:
-            if "split portals" not in str(e).lower() or attempt == RELAY_RETRIES:
+        except (BridgeCommandError, BridgeCommandTimeout) as e:
+            migrating = isinstance(e, BridgeCommandError) and "split portals" in str(e).lower()
+            if not (migrating or isinstance(e, BridgeCommandTimeout)) or attempt == RELAY_RETRIES:
                 raise
             sync_token = e.sync_token or sync_token
-            log.info("Migration en cours, nouvelle tentative (%d/%d)", attempt, RELAY_RETRIES)
+            log.info("Relais pas encore possible, nouvelle tentative (%d/%d)", attempt, RELAY_RETRIES)
             time.sleep(RELAY_RETRY_DELAY)
     return sync_token
+
+
+def room_protocol(client: MatrixClient, room_id: str) -> str | None:
+    deadline = time.monotonic() + PROTOCOL_WAIT
+    while True:
+        for evt in client.get_room_state(room_id):
+            if evt.get("type") in BRIDGE_INFO_TYPES:
+                proto = evt.get("content", {}).get("protocol", {}).get("id")
+                if proto:
+                    return str(proto)
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(1)
+
+
+def get_stage(client: MatrixClient, room_id: str) -> str | None:
+    state = client.get_state_event(room_id, CONFIGURED_STATE_TYPE)
+    if not state:
+        return None
+    if state.get("configured"):
+        return "configured"
+    return state.get("stage")
+
+
+def set_stage(client: MatrixClient, room_id: str, stage: str) -> None:
+    client.set_state_event(room_id, CONFIGURED_STATE_TYPE, {"stage": stage, "at": int(time.time())})
 
 
 def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str:
     log.info("Salon %s", room_id)
     client.join_room(room_id)
-    client.make_room_admin(room_id)
 
-    if client.get_state_event(room_id, CONFIGURED_STATE_TYPE):
+    protocol = room_protocol(client, room_id)
+    if protocol != WHATSAPP_PROTOCOL:
+        log.info("Salon ignoré : protocole %s", protocol or "inconnu")
+        return sync_token
+
+    client.make_room_admin(room_id)
+    stage = get_stage(client, room_id)
+    if stage == "configured":
         log.info("Salon déjà configuré")
         return sync_token
 
-    room_name = client.get_room_name(room_id) or room_id
-    log.info("Nom : %s", room_name)
+    log.info("Nom : %s", client.get_room_name(room_id) or room_id)
+    if stage:
+        log.info("Reprise à l'étape %s", stage)
 
-    client.invite(room_id, TELEGRAM_BOT_MXID)
-    wait_for_member(client, room_id, TELEGRAM_BOT_MXID)
-    client.set_power_level(room_id, TELEGRAM_BOT_MXID, 100)
+    if stage is None:
+        client.invite(room_id, TELEGRAM_BOT_MXID)
+        wait_for_member(client, room_id, TELEGRAM_BOT_MXID)
+        client.set_power_level(room_id, TELEGRAM_BOT_MXID, 100)
 
-    sync_token = run_bridge_command(client, room_id, "!wa set-relay", WHATSAPP_BOT_MXID, sync_token)
+        sync_token = run_bridge_command(client, room_id, "!wa set-relay", WHATSAPP_BOT_MXID, sync_token)
 
-    invited: list[str] = []
-    for ghost in [*TELEGRAM_GHOSTS_TO_INVITE, TELEGRAM_RELAY_GHOST_MXID]:
-        if not ghost or ghost == TELEGRAM_BOT_MXID or ghost in invited:
-            continue
-        log.info("Invitation de %s", ghost)
-        client.invite(room_id, ghost)
-        invited.append(ghost)
+        invited: list[str] = []
+        for ghost in [*TELEGRAM_GHOSTS_TO_INVITE, TELEGRAM_RELAY_GHOST_MXID]:
+            if not ghost or ghost == TELEGRAM_BOT_MXID or ghost in invited:
+                continue
+            log.info("Invitation de %s", ghost)
+            client.invite(room_id, ghost)
+            invited.append(ghost)
 
-    sync_token = run_bridge_command(
-        client, room_id, TELEGRAM_GROUP_COMMAND, TELEGRAM_BOT_MXID, sync_token,
-        require_substring=CREATE_SUCCESS_MARKER,
-    )
+        sync_token = run_bridge_command(
+            client, room_id, TELEGRAM_GROUP_COMMAND, TELEGRAM_BOT_MXID, sync_token,
+            require_substring=CREATE_SUCCESS_MARKER,
+        )
+        set_stage(client, room_id, "created")
+        stage = "created"
 
-    sync_token = run_bridge_command(
-        client, room_id, TELEGRAM_UPGRADE_COMMAND, TELEGRAM_BOT_MXID, sync_token,
-        reply_required=False, timeout=UPGRADE_WAIT,
-    )
+    if stage == "created":
+        sync_token = run_bridge_command(
+            client, room_id, TELEGRAM_UPGRADE_COMMAND, TELEGRAM_BOT_MXID, sync_token,
+            reply_required=False, timeout=UPGRADE_WAIT,
+        )
+        set_stage(client, room_id, "upgraded")
 
     if TELEGRAM_RELAY_LOGIN_ID:
         sync_token = set_relay_when_ready(client, room_id, sync_token)
 
-    client.set_state_event(
-        room_id, CONFIGURED_STATE_TYPE, {"configured": True, "configured_at": int(time.time())}
-    )
+    set_stage(client, room_id, "configured")
     log.info("Salon %s configuré", room_id)
     return sync_token
+
+
+def describe_error(e: Exception) -> str:
+    if isinstance(e, requests.HTTPError) and e.response is not None:
+        try:
+            body = e.response.json()
+            detail = f"{body.get('errcode', '')} {body.get('error', '')}".strip()
+        except ValueError:
+            detail = e.response.text[:100]
+        return f"HTTP {e.response.status_code} {detail}".strip()
+    return f"{type(e).__name__}"
 
 
 def load_sync_token() -> str | None:
@@ -389,7 +447,9 @@ def main() -> None:
             except (BridgeCommandError, BridgeCommandTimeout) as e:
                 log.error("Salon %s non configuré : %s", room_id, e)
             except requests.RequestException as e:
-                log.error("Salon %s : erreur réseau", room_id)
+                log.error("Salon %s non configuré : %s", room_id, describe_error(e))
+            except Exception as e:
+                log.error("Salon %s non configuré : %s", room_id, describe_error(e))
 
 
 if __name__ == "__main__":
