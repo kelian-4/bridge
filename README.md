@@ -136,12 +136,14 @@ docker compose -f Docker/docker-compose.yml logs -f auto-bridge-signal
 
 Optionnel : `setup.sh` propose de l'activer et demande `api_id` et `api_hash` (obtenus sur my.telegram.org). Ils sont stockés dans `.env` (`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`) ; `TELEGRAM_ENABLED=0` désactive la question.
 
-Le bridge est `mautrix-telegram` en Go (bridgev2). Il crée uniquement des **groupes Telegram normaux**, privés : sans lien public ni nom d'utilisateur, accessibles seulement à leurs participants.
+Le bridge est `mautrix-telegram` en Go (bridgev2). Les groupes sont privés : sans nom d'utilisateur public, accessibles seulement à leurs participants.
 
-Deux comptes Telegram sont connectés par QR code, comme pour Signal :
+Deux comptes Telegram sont connectés par QR code :
 
-- ton compte principal (`bridge_login.py telegram`), dont l'identifiant est enregistré dans `TELEGRAM_MAIN_LOGIN_ID`. Son fantôme est invité dans chaque salon pour devenir participant du groupe (Telegram refuse un groupe sans autre membre que son créateur) ;
-- le compte relais (`bridge_login.py telegram --relay`), qui crée les groupes et relaie les messages WhatsApp. Son identifiant est enregistré dans `TELEGRAM_RELAY_LOGIN_ID`. Dans le bridge, un groupe normal appartient à la connexion qui l'a créé et seule cette connexion peut en être le relais : le compte relais doit donc être un compte Telegram ancien et actif, qui n'est pas limité pour la création de groupes.
+- le compte principal (`bridge_login.py telegram`), enregistré dans `TELEGRAM_MAIN_LOGIN_ID`. C'est lui qui crée les groupes ;
+- le compte relais (`bridge_login.py telegram --relay`), enregistré dans `TELEGRAM_RELAY_LOGIN_ID`. Il relaie les messages WhatsApp. Son fantôme est invité dans chaque salon pour devenir participant du groupe (Telegram refuse un groupe sans autre membre que son créateur).
+
+Le bridge ne sait créer que des groupes normaux, liés à la connexion qui les a créés : seule cette connexion peut en être le relais. Après la création, le groupe est donc passé en supergroupe (`!tg upgrade`), qui n'est plus lié à une connexion, puis le relais est désigné.
 
 `TELEGRAM_GHOSTS_TO_INVITE` (liste de MXID de fantômes, séparés par des virgules) reste disponible pour inviter d'autres participants.
 
@@ -149,9 +151,10 @@ Pour chaque nouveau salon WhatsApp, le service `auto-bridge-telegram` (`auto_bri
 
 1. invite `@telegrambot` ;
 2. lance `!wa set-relay` côté WhatsApp ;
-3. invite le fantôme du compte principal ;
-4. lance `!tg create-group <TELEGRAM_RELAY_LOGIN_ID> group` ;
-5. lance `!tg set-relay <TELEGRAM_RELAY_LOGIN_ID>`.
+3. invite le fantôme du compte relais ;
+4. lance `!tg create-group <TELEGRAM_MAIN_LOGIN_ID> group` ;
+5. lance `!tg upgrade` ;
+6. lance `!tg set-relay <TELEGRAM_RELAY_LOGIN_ID>`, en réessayant tant que la migration n'est pas terminée.
 
 Le service démarre quand `TELEGRAM_RELAY_LOGIN_ID` et `TELEGRAM_MAIN_LOGIN_ID` sont renseignés.
 

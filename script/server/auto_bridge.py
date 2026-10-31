@@ -21,18 +21,22 @@ WHATSAPP_BOT_MXID = os.environ.get("WHATSAPP_BOT_MXID", f"@whatsappbot:{DOMAIN}"
 TELEGRAM_BOT_MXID = os.environ.get("TELEGRAM_BOT_MXID", f"@telegrambot:{DOMAIN}")
 TELEGRAM_RELAY_LOGIN_ID = os.environ.get("TELEGRAM_RELAY_LOGIN_ID", "").strip()
 TELEGRAM_MAIN_LOGIN_ID = os.environ.get("TELEGRAM_MAIN_LOGIN_ID", "").strip()
-TELEGRAM_MAIN_GHOST_MXID = os.environ.get(
-    "TELEGRAM_MAIN_GHOST_MXID",
-    f"@telegram_{TELEGRAM_MAIN_LOGIN_ID}:{DOMAIN}" if TELEGRAM_MAIN_LOGIN_ID else "",
+TELEGRAM_RELAY_GHOST_MXID = os.environ.get(
+    "TELEGRAM_RELAY_GHOST_MXID",
+    f"@telegram_{TELEGRAM_RELAY_LOGIN_ID}:{DOMAIN}" if TELEGRAM_RELAY_LOGIN_ID else "",
 )
 TELEGRAM_GHOSTS_TO_INVITE = [
     g.strip() for g in os.environ.get("TELEGRAM_GHOSTS_TO_INVITE", "").split(",") if g.strip()
 ]
 TELEGRAM_GROUP_COMMAND = os.environ.get(
     "TELEGRAM_GROUP_COMMAND",
-    f"!tg create-group {TELEGRAM_RELAY_LOGIN_ID} group" if TELEGRAM_RELAY_LOGIN_ID else "!tg create-group group",
+    f"!tg create-group {TELEGRAM_MAIN_LOGIN_ID} group" if TELEGRAM_MAIN_LOGIN_ID else "!tg create-group group",
 )
 TELEGRAM_SET_RELAY_COMMAND = os.environ.get("TELEGRAM_SET_RELAY_COMMAND", "!tg set-relay")
+TELEGRAM_UPGRADE_COMMAND = os.environ.get("TELEGRAM_UPGRADE_COMMAND", "!tg upgrade")
+UPGRADE_WAIT = int(os.environ.get("UPGRADE_WAIT", "8"))
+RELAY_RETRIES = int(os.environ.get("RELAY_RETRIES", "10"))
+RELAY_RETRY_DELAY = float(os.environ.get("RELAY_RETRY_DELAY", "3"))
 
 BOT_RESPONSE_TIMEOUT = int(os.environ.get("BOT_RESPONSE_TIMEOUT", "30"))
 ROOM_PROCESSING_DELAY = float(os.environ.get("ROOM_PROCESSING_DELAY", "2"))
@@ -53,7 +57,9 @@ log = logging.getLogger("auto_bridge")
 
 
 class BridgeCommandError(Exception):
-    pass
+    def __init__(self, message: str, sync_token: str | None = None) -> None:
+        super().__init__(message)
+        self.sync_token = sync_token
 
 
 class BridgeCommandTimeout(Exception):
@@ -222,10 +228,10 @@ def wait_for_bot_reply(
             if "flood" in lowered and "wait" in lowered:
                 raise TelegramFloodWait(body, parse_flood_wait_seconds(body))
             if any(kw in lowered for kw in ERROR_KEYWORDS):
-                raise BridgeCommandError(body.strip()[:200])
+                raise BridgeCommandError(body.strip()[:200], since)
             if require_substring and require_substring.lower() not in lowered:
                 if strict:
-                    raise BridgeCommandError(body.strip()[:200])
+                    raise BridgeCommandError(body.strip()[:200], since)
                 continue
             return since
     if reply_required:
@@ -242,11 +248,12 @@ def run_bridge_command(
     reply_required: bool = True,
     require_substring: str | None = None,
     strict: bool = False,
+    timeout: int = BOT_RESPONSE_TIMEOUT,
 ) -> str:
     log.info("> %s", command)
     client.send_message(room_id, command)
     return wait_for_bot_reply(
-        client, room_id, expected_sender, sync_token,
+        client, room_id, expected_sender, sync_token, timeout=timeout,
         reply_required=reply_required, require_substring=require_substring, strict=strict,
     )
 
@@ -258,6 +265,23 @@ def wait_for_member(client: MatrixClient, room_id: str, user_id: str, timeout: i
             return
         time.sleep(1)
     raise BridgeCommandTimeout(f"{user_id} n'a pas rejoint le salon")
+
+
+def set_relay_when_ready(client: MatrixClient, room_id: str, sync_token: str) -> str:
+    command = f"{TELEGRAM_SET_RELAY_COMMAND} {TELEGRAM_RELAY_LOGIN_ID}"
+    for attempt in range(1, RELAY_RETRIES + 1):
+        try:
+            return run_bridge_command(
+                client, room_id, command, TELEGRAM_BOT_MXID, sync_token,
+                require_substring=RELAY_SUCCESS_MARKER, strict=True,
+            )
+        except BridgeCommandError as e:
+            if "split portals" not in str(e).lower() or attempt == RELAY_RETRIES:
+                raise
+            sync_token = e.sync_token or sync_token
+            log.info("Migration en cours, nouvelle tentative (%d/%d)", attempt, RELAY_RETRIES)
+            time.sleep(RELAY_RETRY_DELAY)
+    return sync_token
 
 
 def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str:
@@ -279,7 +303,7 @@ def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str
     sync_token = run_bridge_command(client, room_id, "!wa set-relay", WHATSAPP_BOT_MXID, sync_token)
 
     invited: list[str] = []
-    for ghost in [TELEGRAM_MAIN_GHOST_MXID, *TELEGRAM_GHOSTS_TO_INVITE]:
+    for ghost in [*TELEGRAM_GHOSTS_TO_INVITE, TELEGRAM_RELAY_GHOST_MXID]:
         if not ghost or ghost == TELEGRAM_BOT_MXID or ghost in invited:
             continue
         log.info("Invitation de %s", ghost)
@@ -291,12 +315,13 @@ def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str
         require_substring=CREATE_SUCCESS_MARKER,
     )
 
+    sync_token = run_bridge_command(
+        client, room_id, TELEGRAM_UPGRADE_COMMAND, TELEGRAM_BOT_MXID, sync_token,
+        reply_required=False, timeout=UPGRADE_WAIT,
+    )
+
     if TELEGRAM_RELAY_LOGIN_ID:
-        sync_token = run_bridge_command(
-            client, room_id, f"{TELEGRAM_SET_RELAY_COMMAND} {TELEGRAM_RELAY_LOGIN_ID}",
-            TELEGRAM_BOT_MXID, sync_token,
-            require_substring=RELAY_SUCCESS_MARKER, strict=True,
-        )
+        sync_token = set_relay_when_ready(client, room_id, sync_token)
 
     client.set_state_event(
         room_id, CONFIGURED_STATE_TYPE, {"configured": True, "configured_at": int(time.time())}
