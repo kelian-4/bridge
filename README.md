@@ -162,6 +162,27 @@ Le service démarre quand `TELEGRAM_RELAY_LOGIN_ID` et `TELEGRAM_MAIN_LOGIN_ID` 
 docker compose -f Docker/docker-compose.yml logs -f auto-bridge-telegram
 ```
 
+### Limites de Telegram
+
+Les erreurs de Telegram arrivent dans la réponse du bot et sont reconnues par `auto_bridge.py` :
+
+- « A wait of N seconds is required » ou `FLOOD_WAIT (N)` : le script attend N secondes (plus `RATE_LIMIT_MARGIN`) puis reprend le même salon à l'étape où il s'était arrêté, sans recréer de groupe. Au bout de `RATE_LIMIT_RETRIES` essais, le salon est laissé de côté.
+- « Too many requests » : même chose, avec une attente de `RATE_LIMIT_DEFAULT_WAIT` secondes, Telegram n'indiquant pas la durée.
+- « spamreported » ou « too many channels/supergroups » : le compte ne peut plus créer de groupes. Le script s'arrête au lieu d'insister, et le service fait une pause de `TELEGRAM_BLOCKED_PAUSE` secondes.
+
+Entre deux créations de groupe, le script attend au moins `TELEGRAM_CREATE_DELAY` secondes (30 par défaut). Cette valeur est un choix prudent, pas une limite publiée par Telegram. Chaque groupe passé en supergroupe compte dans la limite de supergroupes du compte.
+
+### Anciens salons WhatsApp
+
+`auto_bridge.py` ne traite que les nouvelles invitations. Pour relier les salons WhatsApp qui existent déjà :
+
+```bash
+./with-env.sh python3 script/server/backfill_telegram.py
+./with-env.sh python3 script/server/backfill_telegram.py --execute --limit 20
+```
+
+Sans `--execute`, le script compte et liste sans rien envoyer. Il ignore les salons déjà configurés, déjà reliés à Telegram, remplacés et les espaces. Il s'arrête si Telegram bloque le compte, et se relance sans risque : l'étape de chaque salon est enregistrée, et un salon interrompu reprend où il s'était arrêté.
+
 La config de `mautrix-telegram` est générée par l'image au premier lancement puis ajustée par `setup.sh`. Elle n'est pas versionnée.
 
 ## Commandes non relayées

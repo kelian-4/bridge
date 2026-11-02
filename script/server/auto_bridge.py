@@ -35,6 +35,11 @@ TELEGRAM_GROUP_COMMAND = os.environ.get(
 TELEGRAM_SET_RELAY_COMMAND = os.environ.get("TELEGRAM_SET_RELAY_COMMAND", "!tg set-relay")
 TELEGRAM_UPGRADE_COMMAND = os.environ.get("TELEGRAM_UPGRADE_COMMAND", "!tg upgrade")
 UPGRADE_WAIT = int(os.environ.get("UPGRADE_WAIT", "8"))
+CREATE_DELAY = float(os.environ.get("TELEGRAM_CREATE_DELAY", "30"))
+RATE_LIMIT_MARGIN = float(os.environ.get("RATE_LIMIT_MARGIN", "5"))
+RATE_LIMIT_DEFAULT_WAIT = int(os.environ.get("RATE_LIMIT_DEFAULT_WAIT", "600"))
+RATE_LIMIT_RETRIES = int(os.environ.get("RATE_LIMIT_RETRIES", "5"))
+BLOCKED_PAUSE = int(os.environ.get("TELEGRAM_BLOCKED_PAUSE", "3600"))
 RELAY_RETRIES = int(os.environ.get("RELAY_RETRIES", "10"))
 RELAY_RETRY_DELAY = float(os.environ.get("RELAY_RETRY_DELAY", "3"))
 
@@ -75,19 +80,36 @@ class InvalidSyncToken(Exception):
     pass
 
 
-class TelegramFloodWait(Exception):
-    def __init__(self, message: str, wait_seconds: int | None = None) -> None:
+class TelegramRateLimit(Exception):
+    def __init__(self, message: str, wait_seconds: int | None = None, sync_token: str | None = None) -> None:
         super().__init__(message)
         self.wait_seconds = wait_seconds
+        self.sync_token = sync_token
 
 
-def parse_flood_wait_seconds(body: str) -> int | None:
-    h = re.search(r"(\d+)\s*hour", body)
-    m = re.search(r"(\d+)\s*minute", body)
-    s = re.search(r"(\d+)\s*second", body)
-    if not (h or m or s):
-        return None
-    return (int(h.group(1)) if h else 0) * 3600 + (int(m.group(1)) if m else 0) * 60 + (int(s.group(1)) if s else 0)
+class TelegramBlocked(Exception):
+    def __init__(self, message: str, sync_token: str | None = None) -> None:
+        super().__init__(message)
+        self.sync_token = sync_token
+
+
+FLOOD_PATTERNS = (re.compile(r"a wait of (\d+) seconds"), re.compile(r"flood_wait[ _(]+(\d+)"))
+BLOCKED_MARKERS = ("spamreported", "can't create channels or chats", "too many channels", "channels_too_much", "user_restricted")
+RATE_MARKERS = ("too many requests", "peer_flood")
+
+
+def telegram_limit_error(body: str, sync_token: str | None = None) -> Exception | None:
+    lowered = body.lower()
+    text = body.strip()[:200]
+    if any(marker in lowered for marker in BLOCKED_MARKERS):
+        return TelegramBlocked(text, sync_token)
+    for pattern in FLOOD_PATTERNS:
+        found = pattern.search(lowered)
+        if found:
+            return TelegramRateLimit(text, int(found.group(1)), sync_token)
+    if any(marker in lowered for marker in RATE_MARKERS):
+        return TelegramRateLimit(text, None, sync_token)
+    return None
 
 
 @dataclass
@@ -184,6 +206,11 @@ class MatrixClient:
         resp.raise_for_status()
         return resp.json()
 
+    def joined_rooms(self) -> list[str]:
+        resp = self._request("GET", self._url("/_matrix/client/v3/joined_rooms"))
+        resp.raise_for_status()
+        return list(resp.json().get("joined_rooms", []))
+
     def get_room_name(self, room_id: str) -> str | None:
         resp = self._request("GET", self._url(f"/_matrix/client/v3/rooms/{room_id}/state/m.room.name/"))
         if resp.status_code == 404:
@@ -235,8 +262,10 @@ def wait_for_bot_reply(
             body = evt.get("content", {}).get("body", "")
             log.info("Réponse de %s : %s", expected_sender, body.strip()[:200])
             lowered = body.lower()
-            if "flood" in lowered and "wait" in lowered:
-                raise TelegramFloodWait(body, parse_flood_wait_seconds(body))
+            if expected_sender == TELEGRAM_BOT_MXID:
+                limit = telegram_limit_error(body, since)
+                if limit:
+                    raise limit
             if any(kw in lowered for kw in ERROR_KEYWORDS):
                 raise BridgeCommandError(body.strip()[:200], since)
             if require_substring and require_substring.lower() not in lowered:
@@ -295,17 +324,48 @@ def set_relay_when_ready(client: MatrixClient, room_id: str, sync_token: str) ->
     return sync_token
 
 
-def room_protocol(client: MatrixClient, room_id: str) -> str | None:
-    deadline = time.monotonic() + PROTOCOL_WAIT
+@dataclass
+class RoomInfo:
+    protocols: set[str]
+    space: bool = False
+    tombstoned: bool = False
+
+
+def room_info(client: MatrixClient, room_id: str, wait: int = PROTOCOL_WAIT) -> RoomInfo:
+    deadline = time.monotonic() + wait
     while True:
+        info = RoomInfo(set())
         for evt in client.get_room_state(room_id):
-            if evt.get("type") in BRIDGE_INFO_TYPES:
-                proto = evt.get("content", {}).get("protocol", {}).get("id")
+            kind = evt.get("type")
+            content = evt.get("content", {})
+            if kind in BRIDGE_INFO_TYPES:
+                proto = content.get("protocol", {}).get("id")
                 if proto:
-                    return str(proto)
-        if time.monotonic() >= deadline:
-            return None
+                    info.protocols.add(str(proto))
+            elif kind == "m.room.create" and content.get("type") == "m.space":
+                info.space = True
+            elif kind == "m.room.tombstone":
+                info.tombstoned = True
+        if info.protocols or time.monotonic() >= deadline:
+            return info
         time.sleep(1)
+
+
+_last_create = [0.0]
+
+
+def wait_create_slot() -> None:
+    remaining = _last_create[0] + CREATE_DELAY - time.monotonic()
+    if remaining > 0:
+        log.info("Attente de %.0fs avant la prochaine création", remaining)
+        time.sleep(remaining)
+
+
+def refresh_token(client: MatrixClient, token: str) -> str:
+    try:
+        return client.sync(since=token, timeout_ms=0)["next_batch"]
+    except InvalidSyncToken:
+        return client.sync(since=None, timeout_ms=0)["next_batch"]
 
 
 def get_stage(client: MatrixClient, room_id: str) -> str | None:
@@ -325,15 +385,18 @@ def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str
     log.info("Salon %s", room_id)
     client.join_room(room_id)
 
-    protocol = room_protocol(client, room_id)
-    if protocol != WHATSAPP_PROTOCOL:
-        log.info("Salon ignoré : protocole %s", protocol or "inconnu")
+    info = room_info(client, room_id)
+    if WHATSAPP_PROTOCOL not in info.protocols or info.space:
+        log.info("Salon ignoré : %s", ", ".join(sorted(info.protocols)) or "protocole inconnu")
         return sync_token
 
     client.make_room_admin(room_id)
     stage = get_stage(client, room_id)
     if stage == "configured":
         log.info("Salon déjà configuré")
+        return sync_token
+    if stage is None and "telegram" in info.protocols:
+        log.info("Salon déjà relié à Telegram")
         return sync_token
 
     log.info("Nom : %s", client.get_room_name(room_id) or room_id)
@@ -355,10 +418,14 @@ def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str
             client.invite(room_id, ghost)
             invited.append(ghost)
 
-        sync_token = run_bridge_command(
-            client, room_id, TELEGRAM_GROUP_COMMAND, TELEGRAM_BOT_MXID, sync_token,
-            require_substring=CREATE_SUCCESS_MARKER,
-        )
+        wait_create_slot()
+        try:
+            sync_token = run_bridge_command(
+                client, room_id, TELEGRAM_GROUP_COMMAND, TELEGRAM_BOT_MXID, sync_token,
+                require_substring=CREATE_SUCCESS_MARKER,
+            )
+        finally:
+            _last_create[0] = time.monotonic()
         set_stage(client, room_id, "created")
         stage = "created"
 
@@ -374,6 +441,20 @@ def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str
 
     set_stage(client, room_id, "configured")
     log.info("Salon %s configuré", room_id)
+    return sync_token
+
+
+def process_room(client: MatrixClient, room_id: str, sync_token: str) -> str:
+    for attempt in range(1, RATE_LIMIT_RETRIES + 1):
+        try:
+            return process_new_room(client, room_id, sync_token)
+        except TelegramRateLimit as e:
+            if attempt == RATE_LIMIT_RETRIES:
+                raise
+            wait = (e.wait_seconds or RATE_LIMIT_DEFAULT_WAIT) + RATE_LIMIT_MARGIN
+            log.warning("Telegram demande d'attendre %.0fs (%d/%d)", wait, attempt, RATE_LIMIT_RETRIES)
+            time.sleep(wait)
+            sync_token = refresh_token(client, e.sync_token or sync_token)
     return sync_token
 
 
@@ -438,12 +519,17 @@ def main() -> None:
             if i > 0:
                 time.sleep(ROOM_PROCESSING_DELAY)
             try:
-                since = process_new_room(client, room_id, since)
+                since = process_room(client, room_id, since)
                 save_sync_token(since)
-            except TelegramFloodWait as e:
-                log.error("Telegram impose une attente : %s. Salon %s non configuré", e.wait_seconds or "durée inconnue", room_id)
+            except TelegramBlocked as e:
+                log.error("Telegram bloque la création de groupes : %s. Salon %s non configuré, pause de %ds", e, room_id, BLOCKED_PAUSE)
+                time.sleep(BLOCKED_PAUSE)
+                since = refresh_token(client, since)
                 save_sync_token(since)
                 break
+            except TelegramRateLimit as e:
+                log.error("Salon %s non configuré : %s", room_id, e)
+                since = refresh_token(client, since)
             except (BridgeCommandError, BridgeCommandTimeout) as e:
                 log.error("Salon %s non configuré : %s", room_id, e)
             except requests.RequestException as e:
