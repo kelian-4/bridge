@@ -309,6 +309,9 @@ def wait_for_member(client: MatrixClient, room_id: str, user_id: str, timeout: i
 def set_relay_when_ready(client: MatrixClient, room_id: str, sync_token: str) -> str:
     command = f"{TELEGRAM_SET_RELAY_COMMAND} {TELEGRAM_RELAY_LOGIN_ID}"
     for attempt in range(1, RELAY_RETRIES + 1):
+        if room_info(client, room_id, wait=0).tombstoned:
+            set_stage(client, room_id, "merged")
+            raise BridgeCommandError("Salon remplacé par Telegram après la mise à niveau, relais impossible", sync_token)
         try:
             return run_bridge_command(
                 client, room_id, command, TELEGRAM_BOT_MXID, sync_token,
@@ -394,6 +397,9 @@ def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str
     stage = get_stage(client, room_id)
     if stage == "configured":
         log.info("Salon déjà configuré")
+        return sync_token
+    if stage == "merged":
+        log.info("Salon remplacé par Telegram, ignoré")
         return sync_token
     if stage is None and "telegram" in info.protocols:
         log.info("Salon déjà relié à Telegram")

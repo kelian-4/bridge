@@ -360,9 +360,9 @@ gen_registration() {
   local dir="$1" bin="$2" image="$3" as="$4" hs="$5" out="$6" label="$7" prefix state
   [ -f "$dir/config.yaml" ] || die "$dir/config.yaml absent"
   quiet yq_run -i '
-    .bridge.permissions[strenv(ADMIN_MXID)] = "admin" |
     del(.bridge.permissions["@admin:local.bridge"]) |
-    del(.bridge.permissions["@CHANGE_ME:local.bridge"])
+    del(.bridge.permissions["@CHANGE_ME:local.bridge"]) |
+    .bridge.permissions[strenv(ADMIN_MXID)] = "admin"
   ' "$dir/config.yaml" || die "config $label illisible"
   if [ -s "secrets/$out" ]; then
     state="déjà présente"
