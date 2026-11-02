@@ -140,21 +140,21 @@ Le bridge est `mautrix-telegram` en Go (bridgev2). Les groupes sont privés : sa
 
 Deux comptes Telegram sont connectés par QR code :
 
-- le compte principal (`bridge_login.py telegram`), enregistré dans `TELEGRAM_MAIN_LOGIN_ID`. C'est lui qui crée les groupes ;
-- le compte relais (`bridge_login.py telegram --relay`), enregistré dans `TELEGRAM_RELAY_LOGIN_ID`. Il relaie les messages WhatsApp. Son fantôme est invité dans chaque salon pour devenir participant du groupe (Telegram refuse un groupe sans autre membre que son créateur).
+- le compte relais (`bridge_login.py telegram --relay`), enregistré dans `TELEGRAM_RELAY_LOGIN_ID`. Il crée les groupes et relaie les messages WhatsApp. Il doit pouvoir créer des groupes : un compte récent peut être restreint par Telegram (« spamreported »). Dans le bridge, un groupe normal appartient à la connexion qui l'a créé et seule cette connexion peut en être le relais ;
+- le compte principal (`bridge_login.py telegram`), enregistré dans `TELEGRAM_MAIN_LOGIN_ID`. Son fantôme est invité dans chaque salon pour devenir participant du groupe (Telegram refuse un groupe sans autre membre que son créateur).
 
-Le bridge ne sait créer que des groupes normaux, liés à la connexion qui les a créés : seule cette connexion peut en être le relais. Après la création, le groupe est donc passé en supergroupe (`!tg upgrade`), qui n'est plus lié à une connexion, puis le relais est désigné.
+`TELEGRAM_GHOSTS_TO_INVITE` (MXID de fantômes séparés par des virgules) ajoute des participants **avant** la création : si le compte relais ne connaît pas l'un d'eux, toute la création échoue.
 
-`TELEGRAM_GHOSTS_TO_INVITE` (liste de MXID de fantômes, séparés par des virgules) reste disponible pour inviter d'autres participants.
+`TELEGRAM_EXTRA_GHOSTS` (même format) ajoute des participants **après** la création, sans bloquer : si l'ajout échoue, le groupe est quand même configuré et un avertissement est écrit dans le log. Le compte relais doit connaître l'utilisateur ou le bot (par exemple après un échange de messages).
 
 Pour chaque nouveau salon WhatsApp, le service `auto-bridge-telegram` (`auto_bridge.py`) :
 
 1. invite `@telegrambot` ;
 2. lance `!wa set-relay` côté WhatsApp ;
-3. invite le fantôme du compte relais ;
-4. lance `!tg create-group <TELEGRAM_MAIN_LOGIN_ID> group` ;
-5. lance `!tg upgrade` ;
-6. lance `!tg set-relay <TELEGRAM_RELAY_LOGIN_ID>`, en réessayant tant que la migration n'est pas terminée.
+3. invite le fantôme du compte principal ;
+4. lance `!tg create-group <TELEGRAM_RELAY_LOGIN_ID> group` ;
+5. lance `!tg set-relay <TELEGRAM_RELAY_LOGIN_ID>` ;
+6. ajoute les fantômes de `TELEGRAM_EXTRA_GHOSTS`.
 
 Le service démarre quand `TELEGRAM_RELAY_LOGIN_ID` et `TELEGRAM_MAIN_LOGIN_ID` sont renseignés.
 
@@ -170,7 +170,7 @@ Les erreurs de Telegram arrivent dans la réponse du bot et sont reconnues par `
 - « Too many requests » : même chose, avec une attente de `RATE_LIMIT_DEFAULT_WAIT` secondes, Telegram n'indiquant pas la durée.
 - « spamreported » ou « too many channels/supergroups » : le compte ne peut plus créer de groupes. Le script s'arrête au lieu d'insister, et le service fait une pause de `TELEGRAM_BLOCKED_PAUSE` secondes.
 
-Entre deux créations de groupe, le script attend au moins `TELEGRAM_CREATE_DELAY` secondes (30 par défaut). Cette valeur est un choix prudent, pas une limite publiée par Telegram. Chaque groupe passé en supergroupe compte dans la limite de supergroupes du compte.
+Entre deux créations de groupe, le script attend au moins `TELEGRAM_CREATE_DELAY` secondes (30 par défaut). Cette valeur est un choix prudent, pas une limite publiée par Telegram.
 
 ### Anciens salons WhatsApp
 

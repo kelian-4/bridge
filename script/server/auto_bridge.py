@@ -21,20 +21,22 @@ WHATSAPP_BOT_MXID = os.environ.get("WHATSAPP_BOT_MXID", f"@whatsappbot:{DOMAIN}"
 TELEGRAM_BOT_MXID = os.environ.get("TELEGRAM_BOT_MXID", f"@telegrambot:{DOMAIN}")
 TELEGRAM_RELAY_LOGIN_ID = os.environ.get("TELEGRAM_RELAY_LOGIN_ID", "").strip()
 TELEGRAM_MAIN_LOGIN_ID = os.environ.get("TELEGRAM_MAIN_LOGIN_ID", "").strip()
-TELEGRAM_RELAY_GHOST_MXID = os.environ.get(
-    "TELEGRAM_RELAY_GHOST_MXID",
-    f"@telegram_{TELEGRAM_RELAY_LOGIN_ID}:{DOMAIN}" if TELEGRAM_RELAY_LOGIN_ID else "",
+TELEGRAM_MAIN_GHOST_MXID = os.environ.get(
+    "TELEGRAM_MAIN_GHOST_MXID",
+    f"@telegram_{TELEGRAM_MAIN_LOGIN_ID}:{DOMAIN}" if TELEGRAM_MAIN_LOGIN_ID else "",
 )
+TELEGRAM_EXTRA_GHOSTS = [
+    g.strip() for g in os.environ.get("TELEGRAM_EXTRA_GHOSTS", "").split(",") if g.strip()
+]
+EXTRA_GHOST_WAIT = int(os.environ.get("EXTRA_GHOST_WAIT", "20"))
 TELEGRAM_GHOSTS_TO_INVITE = [
     g.strip() for g in os.environ.get("TELEGRAM_GHOSTS_TO_INVITE", "").split(",") if g.strip()
 ]
 TELEGRAM_GROUP_COMMAND = os.environ.get(
     "TELEGRAM_GROUP_COMMAND",
-    f"!tg create-group {TELEGRAM_MAIN_LOGIN_ID} group" if TELEGRAM_MAIN_LOGIN_ID else "!tg create-group group",
+    f"!tg create-group {TELEGRAM_RELAY_LOGIN_ID} group" if TELEGRAM_RELAY_LOGIN_ID else "!tg create-group group",
 )
 TELEGRAM_SET_RELAY_COMMAND = os.environ.get("TELEGRAM_SET_RELAY_COMMAND", "!tg set-relay")
-TELEGRAM_UPGRADE_COMMAND = os.environ.get("TELEGRAM_UPGRADE_COMMAND", "!tg upgrade")
-UPGRADE_WAIT = int(os.environ.get("UPGRADE_WAIT", "8"))
 CREATE_DELAY = float(os.environ.get("TELEGRAM_CREATE_DELAY", "30"))
 RATE_LIMIT_MARGIN = float(os.environ.get("RATE_LIMIT_MARGIN", "5"))
 RATE_LIMIT_DEFAULT_WAIT = int(os.environ.get("RATE_LIMIT_DEFAULT_WAIT", "600"))
@@ -384,6 +386,18 @@ def set_stage(client: MatrixClient, room_id: str, stage: str) -> None:
     client.set_state_event(room_id, CONFIGURED_STATE_TYPE, {"stage": stage, "at": int(time.time())})
 
 
+def add_extra_ghosts(client: MatrixClient, room_id: str) -> None:
+    for ghost in TELEGRAM_EXTRA_GHOSTS:
+        try:
+            client.invite(room_id, ghost)
+            wait_for_member(client, room_id, ghost, EXTRA_GHOST_WAIT)
+            log.info("%s ajouté au groupe", ghost)
+        except BridgeCommandTimeout:
+            log.warning("%s non confirmé dans le groupe, vérifie que le compte relais le connaît", ghost)
+        except requests.RequestException as e:
+            log.warning("%s non ajouté : %s", ghost, describe_error(e))
+
+
 def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str:
     log.info("Salon %s", room_id)
     client.join_room(room_id)
@@ -417,7 +431,7 @@ def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str
         sync_token = run_bridge_command(client, room_id, "!wa set-relay", WHATSAPP_BOT_MXID, sync_token)
 
         invited: list[str] = []
-        for ghost in [*TELEGRAM_GHOSTS_TO_INVITE, TELEGRAM_RELAY_GHOST_MXID]:
+        for ghost in [TELEGRAM_MAIN_GHOST_MXID, *TELEGRAM_GHOSTS_TO_INVITE]:
             if not ghost or ghost == TELEGRAM_BOT_MXID or ghost in invited:
                 continue
             log.info("Invitation de %s", ghost)
@@ -435,16 +449,10 @@ def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str
         set_stage(client, room_id, "created")
         stage = "created"
 
-    if stage == "created":
-        sync_token = run_bridge_command(
-            client, room_id, TELEGRAM_UPGRADE_COMMAND, TELEGRAM_BOT_MXID, sync_token,
-            reply_required=False, timeout=UPGRADE_WAIT,
-        )
-        set_stage(client, room_id, "upgraded")
-
     if TELEGRAM_RELAY_LOGIN_ID:
         sync_token = set_relay_when_ready(client, room_id, sync_token)
 
+    add_extra_ghosts(client, room_id)
     set_stage(client, room_id, "configured")
     log.info("Salon %s configuré", room_id)
     return sync_token
