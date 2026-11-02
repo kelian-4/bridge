@@ -147,7 +147,7 @@ SERVER_NAME="$(env_get SERVER_NAME)"
 SERVER_NAME="${SERVER_NAME:-$SERVER_NAME_DEFAULT}"
 
 ADMIN_MXID="$(env_get ADMIN_MXID)"
-if is_placeholder "$ADMIN_MXID" || [[ "$ADMIN_MXID" == @admin:* ]]; then
+if is_placeholder "$ADMIN_MXID" || { [[ "$ADMIN_MXID" == @admin:* ]] && is_placeholder "$(env_get MATRIX_ACCESS_TOKEN)"; }; then
   ADMIN_MXID="$(ask ADMIN_MXID "Compte administrateur (ex. kelian) : " '^@?[^:@[:space:]]+(:[^[:space:]]+)?$')"
   ADMIN_MXID="@${ADMIN_MXID#@}"
   case "$ADMIN_MXID" in *:*) ;; *) ADMIN_MXID="$ADMIN_MXID:$SERVER_NAME";; esac
