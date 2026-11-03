@@ -162,6 +162,15 @@ Le service démarre quand `TELEGRAM_RELAY_LOGIN_ID` et `TELEGRAM_MAIN_LOGIN_ID` 
 docker compose -f Docker/docker-compose.yml logs -f auto-bridge-telegram
 ```
 
+### Mode de création
+
+`TELEGRAM_CREATE_MODE` dans `.env` choisit qui crée les groupes :
+
+- `direct` (par défaut) : le compte relais crée le groupe et en est le relais. Il doit pouvoir créer des groupes. Si Telegram l'a restreint, la réponse est « You're spamreported, you can't create channels or chats ».
+- `upgrade` : le compte principal crée le groupe, puis `!tg upgrade` le passe en supergroupe, qui n'est plus lié à une connexion, et enfin le compte relais est désigné. Le fantôme du compte relais est alors le participant invité. À utiliser tant que le compte relais est restreint.
+
+En mode `upgrade`, le bridge peut fusionner le salon dans celui du supergroupe : le salon est alors remplacé et le bot le quitte. Le script le détecte, marque le salon `merged` et ne le retraite pas. Pour repasser en `direct`, supprime la ligne ou mets `direct`, puis recrée le service `auto-bridge-telegram`.
+
 ### Limites de Telegram
 
 Les erreurs de Telegram arrivent dans la réponse du bot et sont reconnues par `auto_bridge.py` :

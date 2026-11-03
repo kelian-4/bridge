@@ -32,10 +32,19 @@ EXTRA_GHOST_WAIT = int(os.environ.get("EXTRA_GHOST_WAIT", "20"))
 TELEGRAM_GHOSTS_TO_INVITE = [
     g.strip() for g in os.environ.get("TELEGRAM_GHOSTS_TO_INVITE", "").split(",") if g.strip()
 ]
+UPGRADE_MODE = os.environ.get("TELEGRAM_CREATE_MODE", "direct").strip().lower() == "upgrade"
+TELEGRAM_RELAY_GHOST_MXID = os.environ.get(
+    "TELEGRAM_RELAY_GHOST_MXID",
+    f"@telegram_{TELEGRAM_RELAY_LOGIN_ID}:{DOMAIN}" if TELEGRAM_RELAY_LOGIN_ID else "",
+)
+CREATOR_LOGIN_ID = TELEGRAM_MAIN_LOGIN_ID if UPGRADE_MODE else TELEGRAM_RELAY_LOGIN_ID
+PARTICIPANT_GHOST_MXID = TELEGRAM_RELAY_GHOST_MXID if UPGRADE_MODE else TELEGRAM_MAIN_GHOST_MXID
 TELEGRAM_GROUP_COMMAND = os.environ.get(
     "TELEGRAM_GROUP_COMMAND",
-    f"!tg create-group {TELEGRAM_RELAY_LOGIN_ID} group" if TELEGRAM_RELAY_LOGIN_ID else "!tg create-group group",
+    f"!tg create-group {CREATOR_LOGIN_ID} group" if CREATOR_LOGIN_ID else "!tg create-group group",
 )
+TELEGRAM_UPGRADE_COMMAND = os.environ.get("TELEGRAM_UPGRADE_COMMAND", "!tg upgrade")
+UPGRADE_WAIT = int(os.environ.get("UPGRADE_WAIT", "8"))
 TELEGRAM_SET_RELAY_COMMAND = os.environ.get("TELEGRAM_SET_RELAY_COMMAND", "!tg set-relay")
 CREATE_DELAY = float(os.environ.get("TELEGRAM_CREATE_DELAY", "30"))
 RATE_LIMIT_MARGIN = float(os.environ.get("RATE_LIMIT_MARGIN", "5"))
@@ -438,7 +447,7 @@ def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str
 
     if stage is None:
         invited: list[str] = []
-        for ghost in [TELEGRAM_MAIN_GHOST_MXID, *TELEGRAM_GHOSTS_TO_INVITE]:
+        for ghost in [PARTICIPANT_GHOST_MXID, *TELEGRAM_GHOSTS_TO_INVITE]:
             if not ghost or ghost == TELEGRAM_BOT_MXID or ghost in invited:
                 continue
             log.info("Invitation de %s", ghost)
@@ -455,6 +464,13 @@ def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str
             _last_create[0] = time.monotonic()
         set_stage(client, room_id, "created")
         stage = "created"
+
+    if UPGRADE_MODE and stage == "created":
+        sync_token = run_bridge_command(
+            client, room_id, TELEGRAM_UPGRADE_COMMAND, TELEGRAM_BOT_MXID, sync_token,
+            reply_required=False, timeout=UPGRADE_WAIT,
+        )
+        set_stage(client, room_id, "upgraded")
 
     if TELEGRAM_RELAY_LOGIN_ID:
         sync_token = set_relay_when_ready(client, room_id, sync_token)
@@ -513,6 +529,7 @@ def reset_sync(client: MatrixClient) -> str:
 def main() -> None:
     client = MatrixClient(HOMESERVER_URL, ACCESS_TOKEN, USER_ID)
     log.info("Démarrage : %s, %s", HOMESERVER_URL, USER_ID)
+    log.info("Mode de création : %s", "mise à niveau en supergroupe" if UPGRADE_MODE else "direct")
 
     try:
         client.disable_own_ratelimit()
