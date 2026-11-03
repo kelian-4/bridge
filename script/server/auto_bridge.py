@@ -179,7 +179,7 @@ class MatrixClient:
         resp = self._request(
             "POST", self._url(f"/_matrix/client/v3/rooms/{room_id}/invite"), json={"user_id": user_id}
         )
-        if resp.status_code == 400 and "already in the room" in resp.text.lower():
+        if resp.status_code in (400, 403) and "already in the room" in resp.text.lower():
             return
         resp.raise_for_status()
 
