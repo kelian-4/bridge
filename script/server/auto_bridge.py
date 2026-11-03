@@ -52,6 +52,9 @@ SYNC_TOKEN_FILE = os.environ.get("SYNC_TOKEN_FILE", "/var/lib/auto-bridge/telegr
 ERROR_KEYWORDS = ("error", "failed", "⚠", "not found", "invalid")
 CREATE_SUCCESS_MARKER = os.environ.get("TELEGRAM_CREATE_MARKER", "successfully created group")
 RELAY_SUCCESS_MARKER = os.environ.get("TELEGRAM_RELAY_MARKER", "will now be relayed")
+WA_RELAY_MARKER = os.environ.get("WHATSAPP_RELAY_MARKER", "will now be relayed")
+MAX_ROOM_ATTEMPTS = int(os.environ.get("MAX_ROOM_ATTEMPTS", "3"))
+ROOM_RETRY_DELAY = float(os.environ.get("ROOM_RETRY_DELAY", "300"))
 CONFIGURED_STATE_TYPE = "fr.kelian.auto_bridge_telegram"
 WHATSAPP_PROTOCOL = os.environ.get("WHATSAPP_PROTOCOL_ID", "whatsapp")
 BRIDGE_INFO_TYPES = ("m.bridge", "uk.half-shot.bridge")
@@ -428,8 +431,12 @@ def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str
         wait_for_member(client, room_id, TELEGRAM_BOT_MXID)
         client.set_power_level(room_id, TELEGRAM_BOT_MXID, 100)
 
-        sync_token = run_bridge_command(client, room_id, "!wa set-relay", WHATSAPP_BOT_MXID, sync_token)
+    sync_token = run_bridge_command(
+        client, room_id, "!wa set-relay", WHATSAPP_BOT_MXID, sync_token,
+        require_substring=WA_RELAY_MARKER, strict=True,
+    )
 
+    if stage is None:
         invited: list[str] = []
         for ghost in [TELEGRAM_MAIN_GHOST_MXID, *TELEGRAM_GHOSTS_TO_INVITE]:
             if not ghost or ghost == TELEGRAM_BOT_MXID or ghost in invited:
@@ -513,6 +520,16 @@ def main() -> None:
         log.warning("Limite de débit non désactivée")
 
     since = load_sync_token() or reset_sync(client)
+    retry: dict[str, tuple[float, int]] = {}
+    blocked_until = 0.0
+
+    def schedule(room_id: str, delay: float, count_attempt: bool = True) -> None:
+        attempts = retry.get(room_id, (0.0, 0))[1] + (1 if count_attempt else 0)
+        if attempts >= MAX_ROOM_ATTEMPTS:
+            retry.pop(room_id, None)
+            log.error("Salon %s abandonné après %d essais, relance backfill_telegram.py", room_id, attempts)
+            return
+        retry[room_id] = (time.monotonic() + delay, attempts)
 
     while True:
         try:
@@ -529,27 +546,43 @@ def main() -> None:
         since = data.get("next_batch", since)
         save_sync_token(since)
 
-        for i, room_id in enumerate(data.get("rooms", {}).get("invite", {})):
+        invites = list(data.get("rooms", {}).get("invite", {}))
+        now = time.monotonic()
+        due = [r for r, (when, _) in retry.items() if when <= now and r not in invites]
+        todo = invites + due
+
+        if now < blocked_until:
+            for room_id in todo:
+                retry.setdefault(room_id, (blocked_until, 0))
+            continue
+
+        for i, room_id in enumerate(todo):
             if i > 0:
                 time.sleep(ROOM_PROCESSING_DELAY)
             try:
                 since = process_room(client, room_id, since)
                 save_sync_token(since)
+                retry.pop(room_id, None)
             except TelegramBlocked as e:
-                log.error("Telegram bloque la création de groupes : %s. Salon %s non configuré, pause de %ds", e, room_id, BLOCKED_PAUSE)
-                time.sleep(BLOCKED_PAUSE)
+                blocked_until = time.monotonic() + BLOCKED_PAUSE
+                log.error("Telegram bloque la création de groupes : %s. Pause de %ds, le salon %s sera réessayé", e, BLOCKED_PAUSE, room_id)
+                retry[room_id] = (blocked_until, retry.get(room_id, (0.0, 0))[1])
+                for other in todo[i + 1:]:
+                    retry.setdefault(other, (blocked_until, 0))
                 since = refresh_token(client, since)
                 save_sync_token(since)
                 break
             except TelegramRateLimit as e:
                 log.error("Salon %s non configuré : %s", room_id, e)
                 since = refresh_token(client, since)
+                schedule(room_id, ROOM_RETRY_DELAY)
             except (BridgeCommandError, BridgeCommandTimeout) as e:
                 log.error("Salon %s non configuré : %s", room_id, e)
-            except requests.RequestException as e:
-                log.error("Salon %s non configuré : %s", room_id, describe_error(e))
+                since = refresh_token(client, getattr(e, "sync_token", None) or since)
+                schedule(room_id, ROOM_RETRY_DELAY)
             except Exception as e:
                 log.error("Salon %s non configuré : %s", room_id, describe_error(e))
+                schedule(room_id, ROOM_RETRY_DELAY)
 
 
 if __name__ == "__main__":
