@@ -23,7 +23,7 @@ def classify(client: ab.MatrixClient, rooms: list[str]) -> dict[str, list[str]]:
         stage = ab.get_stage(client, room_id)
         if stage == "configured":
             result["configured"].append(room_id)
-        elif stage == "merged" or (info.tombstoned and stage is None):
+        elif info.tombstoned and stage is None:
             result["skipped"].append(room_id)
         elif stage is None and "telegram" in info.protocols:
             result["linked"].append(room_id)

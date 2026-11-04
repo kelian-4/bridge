@@ -169,7 +169,15 @@ docker compose -f Docker/docker-compose.yml logs -f auto-bridge-telegram
 - `direct` (par défaut) : le compte relais crée le groupe et en est le relais. Il doit pouvoir créer des groupes. Si Telegram l'a restreint, la réponse est « You're spamreported, you can't create channels or chats ».
 - `upgrade` : le compte principal crée le groupe, puis `!tg upgrade` le passe en supergroupe, qui n'est plus lié à une connexion, et enfin le compte relais est désigné. Le fantôme du compte relais est alors le participant invité. À utiliser tant que le compte relais est restreint.
 
-En mode `upgrade`, le bridge peut fusionner le salon dans celui du supergroupe : le salon est alors remplacé et le bot le quitte. Le script le détecte, marque le salon `merged` et ne le retraite pas. Pour repasser en `direct`, supprime la ligne ou mets `direct`, puis recrée le service `auto-bridge-telegram`.
+En mode `upgrade`, le bridge peut fusionner le salon dans celui du supergroupe : le salon d'origine est alors remplacé (tombstone) et le bot Telegram le quitte. Le script répare ce cas :
+
+1. il lit le salon de remplacement indiqué par le tombstone et le rejoint ;
+2. si le bridge WhatsApp l'a suivi, tout est dans ce salon : le script y pose les relais ;
+3. sinon, il ré-invite le bot dans le salon d'origine et rattache le supergroupe avec `!tg bridge <compte principal> <supergroupe> --overwrite --ignore-permissions`, qui tombstone le salon de remplacement, puis il pose le relais.
+
+Les salons déjà marqués `merged` par une ancienne version sont réparés de la même façon. La bannière « salon remplacé » peut rester affichée dans Element, un tombstone ne pouvant pas être retiré.
+
+Pour repasser en `direct`, supprime la ligne ou mets `direct`, puis recrée le service `auto-bridge-telegram`.
 
 ### Limites de Telegram
 

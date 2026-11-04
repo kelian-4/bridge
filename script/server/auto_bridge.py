@@ -62,12 +62,14 @@ ERROR_KEYWORDS = ("error", "failed", "⚠", "not found", "invalid")
 CREATE_SUCCESS_MARKER = os.environ.get("TELEGRAM_CREATE_MARKER", "successfully created group")
 RELAY_SUCCESS_MARKER = os.environ.get("TELEGRAM_RELAY_MARKER", "will now be relayed")
 WA_RELAY_MARKER = os.environ.get("WHATSAPP_RELAY_MARKER", "will now be relayed")
+PLUMB_SUCCESS_MARKER = os.environ.get("TELEGRAM_BRIDGE_MARKER", "successfully plumbed")
 MAX_ROOM_ATTEMPTS = int(os.environ.get("MAX_ROOM_ATTEMPTS", "3"))
 ROOM_RETRY_DELAY = float(os.environ.get("ROOM_RETRY_DELAY", "300"))
 CONFIGURED_STATE_TYPE = "fr.kelian.auto_bridge_telegram"
 WHATSAPP_PROTOCOL = os.environ.get("WHATSAPP_PROTOCOL_ID", "whatsapp")
 BRIDGE_INFO_TYPES = ("m.bridge", "uk.half-shot.bridge")
 PROTOCOL_WAIT = int(os.environ.get("PROTOCOL_WAIT", "15"))
+MERGE_WAIT = int(os.environ.get("MERGE_WAIT", "10"))
 SYNC_TIMEOUT_MS = 30_000
 
 logging.basicConfig(
@@ -98,6 +100,13 @@ class TelegramRateLimit(Exception):
     def __init__(self, message: str, wait_seconds: int | None = None, sync_token: str | None = None) -> None:
         super().__init__(message)
         self.wait_seconds = wait_seconds
+        self.sync_token = sync_token
+
+
+class RoomReplaced(Exception):
+    def __init__(self, replacement: str, sync_token: str | None = None) -> None:
+        super().__init__(f"Salon remplacé par {replacement}")
+        self.replacement = replacement
         self.sync_token = sync_token
 
 
@@ -320,12 +329,13 @@ def wait_for_member(client: MatrixClient, room_id: str, user_id: str, timeout: i
     raise BridgeCommandTimeout(f"{user_id} n'a pas rejoint le salon")
 
 
-def set_relay_when_ready(client: MatrixClient, room_id: str, sync_token: str) -> str:
+def set_relay_when_ready(client: MatrixClient, room_id: str, sync_token: str, check_tombstone: bool = True) -> str:
     command = f"{TELEGRAM_SET_RELAY_COMMAND} {TELEGRAM_RELAY_LOGIN_ID}"
     for attempt in range(1, RELAY_RETRIES + 1):
-        if room_info(client, room_id, wait=0).tombstoned:
-            set_stage(client, room_id, "merged")
-            raise BridgeCommandError("Salon remplacé par Telegram après la mise à niveau, relais impossible", sync_token)
+        if check_tombstone:
+            info = room_info(client, room_id, wait=0)
+            if info.tombstoned and info.replacement:
+                raise RoomReplaced(info.replacement, sync_token)
         try:
             return run_bridge_command(
                 client, room_id, command, TELEGRAM_BOT_MXID, sync_token,
@@ -346,6 +356,8 @@ class RoomInfo:
     protocols: set[str]
     space: bool = False
     tombstoned: bool = False
+    replacement: str = ""
+    telegram_chat: str = ""
 
 
 def room_info(client: MatrixClient, room_id: str, wait: int = PROTOCOL_WAIT) -> RoomInfo:
@@ -359,10 +371,13 @@ def room_info(client: MatrixClient, room_id: str, wait: int = PROTOCOL_WAIT) -> 
                 proto = content.get("protocol", {}).get("id")
                 if proto:
                     info.protocols.add(str(proto))
+                    if proto == "telegram":
+                        info.telegram_chat = str(content.get("channel", {}).get("id", "")) or info.telegram_chat
             elif kind == "m.room.create" and content.get("type") == "m.space":
                 info.space = True
             elif kind == "m.room.tombstone":
                 info.tombstoned = True
+                info.replacement = str(content.get("replacement_room", ""))
         if info.protocols or time.monotonic() >= deadline:
             return info
         time.sleep(1)
@@ -410,6 +425,45 @@ def add_extra_ghosts(client: MatrixClient, room_id: str) -> None:
             log.warning("%s non ajouté : %s", ghost, describe_error(e))
 
 
+def recover_merge(client: MatrixClient, old_room: str, replacement: str, sync_token: str) -> tuple[str, str]:
+    log.warning("Salon remplacé par %s, réparation", replacement)
+    try:
+        client.join_room(replacement)
+    except requests.RequestException as e:
+        raise BridgeCommandError(f"Salon de remplacement {replacement} inaccessible : {describe_error(e)}", sync_token)
+
+    deadline = time.monotonic() + MERGE_WAIT
+    while True:
+        info = room_info(client, replacement, wait=0)
+        if WHATSAPP_PROTOCOL in info.protocols or time.monotonic() >= deadline:
+            break
+        time.sleep(1)
+
+    if WHATSAPP_PROTOCOL in info.protocols:
+        log.info("Le bridge WhatsApp a suivi le salon de remplacement")
+        sync_token = run_bridge_command(
+            client, replacement, "!wa set-relay", WHATSAPP_BOT_MXID, sync_token,
+            require_substring=WA_RELAY_MARKER, strict=True,
+        )
+        if TELEGRAM_RELAY_LOGIN_ID:
+            sync_token = set_relay_when_ready(client, replacement, sync_token)
+        return replacement, sync_token
+
+    if not info.telegram_chat:
+        raise BridgeCommandError("Identifiant du supergroupe introuvable dans le salon de remplacement", sync_token)
+    log.info("Rattachement de %s au salon d'origine", info.telegram_chat)
+    client.invite(old_room, TELEGRAM_BOT_MXID)
+    wait_for_member(client, old_room, TELEGRAM_BOT_MXID)
+    client.set_power_level(old_room, TELEGRAM_BOT_MXID, 100)
+    sync_token = run_bridge_command(
+        client, old_room, f"!tg bridge {TELEGRAM_MAIN_LOGIN_ID} {info.telegram_chat} --overwrite --ignore-permissions",
+        TELEGRAM_BOT_MXID, sync_token, require_substring=PLUMB_SUCCESS_MARKER, strict=True,
+    )
+    if TELEGRAM_RELAY_LOGIN_ID:
+        sync_token = set_relay_when_ready(client, old_room, sync_token, check_tombstone=False)
+    return old_room, sync_token
+
+
 def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str:
     log.info("Salon %s", room_id)
     client.join_room(room_id)
@@ -423,9 +477,6 @@ def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str
     stage = get_stage(client, room_id)
     if stage == "configured":
         log.info("Salon déjà configuré")
-        return sync_token
-    if stage == "merged":
-        log.info("Salon remplacé par Telegram, ignoré")
         return sync_token
     if stage is None and "telegram" in info.protocols:
         log.info("Salon déjà relié à Telegram")
@@ -472,11 +523,17 @@ def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str
         )
         set_stage(client, room_id, "upgraded")
 
+    final_room = room_id
     if TELEGRAM_RELAY_LOGIN_ID:
-        sync_token = set_relay_when_ready(client, room_id, sync_token)
+        try:
+            sync_token = set_relay_when_ready(client, room_id, sync_token)
+        except RoomReplaced as e:
+            final_room, sync_token = recover_merge(client, room_id, e.replacement, sync_token)
 
-    add_extra_ghosts(client, room_id)
-    set_stage(client, room_id, "configured")
+    add_extra_ghosts(client, final_room)
+    set_stage(client, final_room, "configured")
+    if final_room != room_id:
+        set_stage(client, room_id, "configured")
     log.info("Salon %s configuré", room_id)
     return sync_token
 
