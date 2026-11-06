@@ -12,6 +12,7 @@ Docker/secrets/
 *.sql
 Docker/postgres-data/
 Docker/mautrix-telegram/
+Docker/mautrix-telegram.go-*/
 Docker/synapse/media_store/
 
 # fichiers parasites

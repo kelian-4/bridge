@@ -134,60 +134,42 @@ docker compose -f Docker/docker-compose.yml logs -f auto-bridge-signal
 
 ## Telegram
 
-Optionnel : `setup.sh` propose de l'activer et demande `api_id` et `api_hash` (obtenus sur my.telegram.org). Ils sont stockés dans `.env` (`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`) ; `TELEGRAM_ENABLED=0` désactive la question.
+Optionnel : `setup.sh` propose de l'activer et demande `api_id` et `api_hash` (obtenus sur my.telegram.org) ainsi que le token d'un bot créé avec @BotFather. Ils sont stockés dans `.env` (`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_BOT_TOKEN`) ; `TELEGRAM_ENABLED=0` désactive la question.
 
-Le bridge est `mautrix-telegram` en Go (bridgev2). Les groupes sont privés : sans nom d'utilisateur public, accessibles seulement à leurs participants.
+Le bridge est `mautrix-telegram` en **Python, version 0.15.3** (`TELEGRAM_IMAGE`), la dernière avant la réécriture en Go. Cette version n'est plus maintenue. La version Go ne sait créer que des groupes normaux, liés au compte qui les a créés, ce qui impose un compte relais restreint par Telegram et provoque des fusions de salons après `!tg upgrade` : l'historique du dépôt garde ce travail.
 
-Deux comptes Telegram sont connectés par QR code :
+Deux éléments interviennent :
 
-- le compte relais (`bridge_login.py telegram --relay`), enregistré dans `TELEGRAM_RELAY_LOGIN_ID`. Il crée les groupes et relaie les messages WhatsApp. Il doit pouvoir créer des groupes : un compte récent peut être restreint par Telegram (« spamreported »). Dans le bridge, un groupe normal appartient à la connexion qui l'a créé et seule cette connexion peut en être le relais ;
-- le compte principal (`bridge_login.py telegram`), enregistré dans `TELEGRAM_MAIN_LOGIN_ID`. Son fantôme est invité dans chaque salon pour devenir participant du groupe (Telegram refuse un groupe sans autre membre que son créateur).
-
-`TELEGRAM_GHOSTS_TO_INVITE` (MXID de fantômes séparés par des virgules) ajoute des participants **avant** la création : si le compte relais ne connaît pas l'un d'eux, toute la création échoue.
-
-`TELEGRAM_EXTRA_GHOSTS` (même format) ajoute des participants **après** la création, sans bloquer : si l'ajout échoue, le groupe est quand même configuré et un avertissement est écrit dans le log. Le compte relais doit connaître l'utilisateur ou le bot (par exemple après un échange de messages).
+- **ton compte Telegram**, connecté par QR code avec la commande `login-qr` (`bridge_login.py telegram`, ou `./Docker/setup.sh`). C'est lui qui crée les supergroupes ;
+- **le bot relais** (token de BotFather). Il est ajouté à chaque groupe créé et relaie les messages des utilisateurs Matrix sans compte Telegram, comme tes contacts WhatsApp. Un bot ne crée pas de groupe : il n'est donc pas concerné par les restrictions de création de Telegram.
 
 Pour chaque nouveau salon WhatsApp, le service `auto-bridge-telegram` (`auto_bridge.py`) :
 
-1. invite `@telegrambot` ;
+1. invite `@telegrambot`, le bot du pont ;
 2. lance `!wa set-relay` côté WhatsApp ;
-3. invite le fantôme du compte principal ;
-4. lance `!tg create-group <TELEGRAM_RELAY_LOGIN_ID> group` ;
-5. lance `!tg set-relay <TELEGRAM_RELAY_LOGIN_ID>` ;
-6. ajoute les fantômes de `TELEGRAM_EXTRA_GHOSTS`.
+3. invite le fantôme du bot relais et ceux de `TELEGRAM_GHOSTS_TO_INVITE` (le bridge exige un autre utilisateur Telegram que le créateur) ;
+4. appelle l'API de provisionnement du bridge, `POST /_matrix/provision/v1/portal/<salon>/create`, qui crée un supergroupe privé pour ce salon ;
+5. ajoute les fantômes de `TELEGRAM_EXTRA_GHOSTS`, sans bloquer si l'ajout échoue.
 
-Le service démarre quand `TELEGRAM_RELAY_LOGIN_ID` et `TELEGRAM_MAIN_LOGIN_ID` sont renseignés.
+La création passe par l'API HTTP et non par une commande `!tg` : aucun message n'est envoyé dans le salon, donc rien ne peut être relayé vers WhatsApp. Le secret de l'API est `TELEGRAM_PROVISIONING_SECRET`, et le port est publié sur `127.0.0.1` seulement.
 
 ```bash
 docker compose -f Docker/docker-compose.yml logs -f auto-bridge-telegram
 ```
 
-### Mode de création
+Un salon dont le supergroupe existe déjà (`409 room_already_bridged`) n'est pas recréé, et l'étape atteinte est enregistrée dans l'état du salon.
 
-`TELEGRAM_CREATE_MODE` dans `.env` choisit qui crée les groupes :
-
-- `direct` (par défaut) : le compte relais crée le groupe et en est le relais. Il doit pouvoir créer des groupes. Si Telegram l'a restreint, la réponse est « You're spamreported, you can't create channels or chats ».
-- `upgrade` : le compte principal crée le groupe, puis `!tg upgrade` le passe en supergroupe, qui n'est plus lié à une connexion, et enfin le compte relais est désigné. Le fantôme du compte relais est alors le participant invité. À utiliser tant que le compte relais est restreint.
-
-En mode `upgrade`, le bridge peut fusionner le salon dans celui du supergroupe : le salon d'origine est alors remplacé (tombstone) et le bot Telegram le quitte. Le script répare ce cas :
-
-1. il lit le salon de remplacement indiqué par le tombstone et le rejoint ;
-2. si le bridge WhatsApp l'a suivi, tout est dans ce salon : le script y pose les relais ;
-3. sinon, il ré-invite le bot dans le salon d'origine et rattache le supergroupe avec `!tg bridge <compte principal> <supergroupe> --overwrite --ignore-permissions`, qui tombstone le salon de remplacement, puis il pose le relais.
-
-Les salons déjà marqués `merged` par une ancienne version sont réparés de la même façon. La bannière « salon remplacé » peut rester affichée dans Element, un tombstone ne pouvant pas être retiré.
-
-Pour repasser en `direct`, supprime la ligne ou mets `direct`, puis recrée le service `auto-bridge-telegram`.
+La config de `mautrix-telegram` est générée par l'image au premier lancement puis ajustée par `setup.sh`. Elle contient des secrets et n'est pas versionnée. Une ancienne configuration du bridge Go est déplacée dans `mautrix-telegram.go-<date>`, sans rien supprimer.
 
 ### Limites de Telegram
 
-Les erreurs de Telegram arrivent dans la réponse du bot et sont reconnues par `auto_bridge.py` :
+Les erreurs de Telegram sont reconnues dans la réponse de l'API :
 
-- « A wait of N seconds is required » ou `FLOOD_WAIT (N)` : le script attend N secondes (plus `RATE_LIMIT_MARGIN`) puis reprend le même salon à l'étape où il s'était arrêté, sans recréer de groupe. Au bout de `RATE_LIMIT_RETRIES` essais, le salon est laissé de côté.
+- « A wait of N seconds is required » : le script attend N secondes (plus `RATE_LIMIT_MARGIN`) puis reprend le même salon, sans recréer de groupe. Au bout de `RATE_LIMIT_RETRIES` essais, le salon est mis en file pour un nouvel essai.
 - « Too many requests » : même chose, avec une attente de `RATE_LIMIT_DEFAULT_WAIT` secondes, Telegram n'indiquant pas la durée.
 - « spamreported » ou « too many channels/supergroups » : le compte ne peut plus créer de groupes. Le script s'arrête au lieu d'insister, et le service fait une pause de `TELEGRAM_BLOCKED_PAUSE` secondes.
 
-Entre deux créations de groupe, le script attend au moins `TELEGRAM_CREATE_DELAY` secondes (30 par défaut). Cette valeur est un choix prudent, pas une limite publiée par Telegram.
+Entre deux créations, le script attend au moins `TELEGRAM_CREATE_DELAY` secondes (30 par défaut). Cette valeur est un choix prudent, pas une limite publiée par Telegram.
 
 ### Anciens salons WhatsApp
 
@@ -198,15 +180,15 @@ Entre deux créations de groupe, le script attend au moins `TELEGRAM_CREATE_DELA
 ./with-env.sh python3 script/server/backfill_telegram.py --execute --limit 20
 ```
 
-Sans `--execute`, le script compte et liste sans rien envoyer. Il ignore les salons déjà configurés, déjà reliés à Telegram, remplacés et les espaces. Il s'arrête si Telegram bloque le compte, et se relance sans risque : l'étape de chaque salon est enregistrée, et un salon interrompu reprend où il s'était arrêté.
-
-La config de `mautrix-telegram` est générée par l'image au premier lancement puis ajustée par `setup.sh`. Elle n'est pas versionnée.
+Sans `--execute`, le script compte et liste sans rien envoyer. Il ignore les salons déjà configurés, déjà reliés à Telegram (état demandé à l'API du bridge), remplacés et les espaces. Il s'arrête si Telegram bloque le compte, et se relance sans risque.
 
 ## Commandes non relayées
 
-Dans un salon bridgé, un message n'est une commande que s'il commence par le préfixe de son propre bridge (`!wa`, `!tg`, `!signal`). Sinon, l'autre bridge le relaie comme un message normal vers WhatsApp, Telegram ou Signal.
+Dans un salon bridgé, un message n'est une commande que s'il commence par le préfixe de son propre bridge (`!wa`, `!signal`, `!tg`). Sinon, l'autre bridge le relaie comme un message normal.
 
-Le module `Docker/synapse/modules/command_notice.py` règle ce problème : il transforme en notice (`m.notice`) tout message texte qui commence par l'un de ces préfixes. Le bridge propriétaire exécute toujours la commande, et les bridges ont `bridge_notices: false`, donc aucun ne la relaie. `setup.sh` l'active dans `homeserver.yaml` après avoir vérifié que l'image Synapse le charge.
+Le module `Docker/synapse/modules/command_notice.py` règle ce problème pour `!wa` et `!signal` : il transforme en notice (`m.notice`) tout message texte qui commence par l'un de ces préfixes. Le bridge propriétaire exécute toujours la commande, et les bridges ont `bridge_notices: false`, donc aucun ne la relaie.
+
+Les commandes `!tg` ne sont pas filtrées : le bridge Python ignore une commande qui n'est pas du texte (vérifié sur le vrai programme). Tape-les dans la discussion privée avec le bot du pont Telegram, jamais dans un salon bridgé, où le bridge WhatsApp les relaierait. `setup.sh` l'active dans `homeserver.yaml` après avoir vérifié que l'image Synapse le charge.
 
 Le préfixe doit être suivi d'un espace ou de la fin du message : `!wally` et `bonjour !wa` ne sont pas touchés. Les préfixes se changent dans `homeserver.yaml` (`modules`, clé `prefixes`).
 

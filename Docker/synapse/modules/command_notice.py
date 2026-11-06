@@ -4,7 +4,7 @@ from typing import Optional, Tuple
 
 class CommandNotice:
     def __init__(self, config: dict, api) -> None:
-        prefixes = config.get("prefixes") or ["!wa", "!tg", "!signal"]
+        prefixes = config.get("prefixes") or ["!wa", "!signal"]
         alternatives = "|".join(re.escape(p) for p in prefixes)
         self._pattern = re.compile(r"^\s*(?:" + alternatives + r")(?:\s|$)")
         api.register_third_party_rules_callbacks(check_event_allowed=self.check_event_allowed)

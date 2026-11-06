@@ -16,9 +16,9 @@ from _qr_terminal import png_to_terminal  # noqa: E402
 
 DEFAULT_BOTS = {"whatsapp": "whatsappbot", "signal": "signalbot", "telegram": "telegrambot"}
 UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
-SUCCESS_RE = re.compile(r"successfully logged in", re.I)
-FAILURE_RE = re.compile(r"login failed|failed to log ?in", re.I)
-TELEGRAM_ID_RES = (re.compile(r"`(\d{5,})`"), re.compile(r"\((\d{5,})\)"))
+SUCCESS_RE = re.compile(r"successfully logged in|you are already logged in", re.I)
+FAILURE_RE = re.compile(r"login failed|failed to log ?in|login timed out|does not support logging in", re.I)
+DEFAULT_COMMANDS = {"telegram": "login-qr"}
 
 
 class Client:
@@ -118,34 +118,6 @@ def write_env_value(path, key, value):
     p.write_text("\n".join(out) + "\n")
 
 
-def telegram_login_id(text):
-    for rx in TELEGRAM_ID_RES:
-        found = rx.search(text)
-        if found:
-            return found.group(1)
-    return None
-
-
-def fetch_login_id(client, room, bot, since, parse, timeout=30):
-    sent = client.send(room, "list-logins")
-    seen = False
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        data = client.sync(since, 5000)
-        since = data["next_batch"]
-        events = data.get("rooms", {}).get("join", {}).get(room, {}).get("timeline", {}).get("events", [])
-        for ev in events:
-            if ev.get("event_id") == sent:
-                seen = True
-                continue
-            if not seen or ev.get("sender") != bot or ev.get("type") != "m.room.message":
-                continue
-            found = parse(event_content(ev).get("body", ""))
-            if found:
-                return found
-    return None
-
-
 def event_content(event):
     content = event.get("content", {})
     rel = content.get("m.relates_to", {})
@@ -176,12 +148,11 @@ def main():
     ap = argparse.ArgumentParser(description="Connecte ton compte à un bridge (WhatsApp, Signal, Telegram) depuis le terminal.")
     ap.add_argument("bridge", help="whatsapp, signal, telegram, ou l'identifiant complet d'un bot (@bot:domaine)")
     ap.add_argument("--flow", help="méthode de connexion à demander tout de suite (ex. qr, phone-code) ; sinon le bot propose")
-    ap.add_argument("--command", default="login", help="commande envoyée au bot (défaut : login)")
+    ap.add_argument("--command", default=None, help="commande envoyée au bot (défaut : login, login-qr pour telegram)")
     ap.add_argument("--homeserver", default=os.environ.get("MATRIX_HOMESERVER_URL", "http://127.0.0.1:8008"))
     ap.add_argument("--token", default=os.environ.get("MATRIX_ACCESS_TOKEN", ""))
     ap.add_argument("--env-file", default=".env")
     ap.add_argument("--timeout", type=int, default=600, help="durée maximale en secondes (défaut : 600)")
-    ap.add_argument("--relay", action="store_true", help="connecte le compte relais et enregistre son identifiant (telegram)")
     ap.add_argument("--debug", action="store_true", help="affiche chaque évènement reçu (diagnostic)")
     args = ap.parse_args()
 
@@ -198,6 +169,7 @@ def main():
             sys.exit("Bridge inconnu")
         bot = os.environ.get(kind.upper() + "_BOT_MXID") or f"@{DEFAULT_BOTS[kind]}:{domain}"
 
+    args.command = args.command or DEFAULT_COMMANDS.get(kind, "login")
     room = find_dm(client, me, bot)
     if room:
         print(f"Discussion {bot} ouverte")
@@ -284,17 +256,9 @@ def main():
     if result[0] == "echec":
         return 1
     print("Connexion réussie")
-    if kind in DEFAULT_BOTS and not args.relay:
+    if kind in DEFAULT_BOTS:
         write_env_value(args.env_file, kind.upper() + "_CONNECTED", "1")
     found = UUID_RE.search(result[1])
-    if kind == "telegram":
-        env_key = "TELEGRAM_RELAY_LOGIN_ID" if args.relay else "TELEGRAM_MAIN_LOGIN_ID"
-        login_id = telegram_login_id(result[1]) or fetch_login_id(client, room, bot, since, telegram_login_id)
-        if login_id:
-            write_env_value(args.env_file, env_key, login_id)
-            print(f"{env_key} enregistré")
-        else:
-            print(f"{env_key} introuvable, renseigne-le dans .env")
     if kind == "signal" and found:
         current = read_env_value(args.env_file, "SIGNAL_RELAY_LOGIN_ID")
         login_id = found.group(0)

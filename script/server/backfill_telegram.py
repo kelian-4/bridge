@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
 
 import requests
 
@@ -25,7 +24,7 @@ def classify(client: ab.MatrixClient, rooms: list[str]) -> dict[str, list[str]]:
             result["configured"].append(room_id)
         elif info.tombstoned and stage is None:
             result["skipped"].append(room_id)
-        elif stage is None and "telegram" in info.protocols:
+        elif stage is None and ab.portal_exists(room_id):
             result["linked"].append(room_id)
         else:
             result["pending"].append(room_id)
@@ -46,11 +45,15 @@ def main() -> int:
     args = parser.parse_args()
 
     client = ab.MatrixClient(ab.HOMESERVER_URL, ab.ACCESS_TOKEN, ab.USER_ID)
-    if not ab.TELEGRAM_RELAY_LOGIN_ID or not ab.TELEGRAM_MAIN_LOGIN_ID:
-        print("TELEGRAM_RELAY_LOGIN_ID et TELEGRAM_MAIN_LOGIN_ID doivent être renseignés dans .env")
+    if not ab.TELEGRAM_BOT_ID or not ab.PROVISIONING_SECRET:
+        print("TELEGRAM_BOT_ID et TELEGRAM_PROVISIONING_SECRET doivent être renseignés dans .env")
         return 1
 
-    groups = classify(client, client.joined_rooms())
+    try:
+        groups = classify(client, client.joined_rooms())
+    except ab.BridgeCommandError as e:
+        print(e)
+        return 1
     pending = groups["pending"]
     if args.limit > 0:
         pending = pending[: args.limit]

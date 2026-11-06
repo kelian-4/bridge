@@ -101,7 +101,7 @@ services:
       - bridgenet
 
   mautrix-telegram:
-    image: ${TELEGRAM_IMAGE:-dock.mau.dev/mautrix/telegram:latest}
+    image: ${TELEGRAM_IMAGE:-dock.mau.dev/mautrix/telegram:v0.15.3}
     profiles: ["local-telegram"]
     container_name: mautrix-telegram
     restart: unless-stopped
@@ -110,12 +110,10 @@ services:
         condition: service_started
         required: false
     environment:
-      BRIDGE_APPSERVICE__AS_TOKEN: ${TELEGRAM_AS_TOKEN:-}
-      BRIDGE_APPSERVICE__HS_TOKEN: ${TELEGRAM_HS_TOKEN:-}
-      BRIDGE_NETWORK__API_ID: ${TELEGRAM_API_ID:-}
-      BRIDGE_NETWORK__API_HASH: ${TELEGRAM_API_HASH:-}
       UID: ${HOST_UID:-1337}
       GID: ${HOST_GID:-1337}
+    ports:
+      - "127.0.0.1:${TELEGRAM_PROVISIONING_PORT:-29317}:29317"
     volumes:
       - ./mautrix-telegram:/data
     networks:
@@ -160,7 +158,7 @@ services:
     command: ["auto_bridge.py"]
     environment:
       SYNC_TOKEN_FILE: /state/telegram_next_batch
-      REQUIRED_VARS: MATRIX_ACCESS_TOKEN TELEGRAM_RELAY_LOGIN_ID TELEGRAM_MAIN_LOGIN_ID
+      REQUIRED_VARS: MATRIX_ACCESS_TOKEN TELEGRAM_BOT_ID TELEGRAM_PROVISIONING_SECRET
       SERVICE_NAME: auto-bridge-telegram
     volumes:
       - ../script/server:/app:ro
