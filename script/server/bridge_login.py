@@ -57,6 +57,15 @@ class Client:
         data = self.req("GET", f"/_matrix/client/v3/rooms/{urllib.parse.quote(room)}/joined_members")
         return set(data.get("joined", {}).keys())
 
+    def can_post(self, room, me):
+        try:
+            pl = self.req("GET", f"/_matrix/client/v3/rooms/{urllib.parse.quote(room)}/state/m.room.power_levels/")
+        except RuntimeError:
+            return False
+        level = pl.get("users", {}).get(me, pl.get("users_default", 0))
+        needed = pl.get("events", {}).get("m.room.message", pl.get("events_default", 0))
+        return level >= needed
+
     def create_dm(self, bot):
         return self.req("POST", "/_matrix/client/v3/createRoom",
                         {"invite": [bot], "is_direct": True, "preset": "trusted_private_chat"})["room_id"]
@@ -88,7 +97,7 @@ class Client:
 
 def find_dm(client, me, bot):
     for room in client.joined_rooms():
-        if client.members(room) == {me, bot}:
+        if client.members(room) == {me, bot} and client.can_post(room, me):
             return room
     return None
 
