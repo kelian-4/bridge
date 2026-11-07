@@ -93,6 +93,23 @@ def find_dm(client, me, bot):
     return None
 
 
+def search_remote(client, room, bot, since, query, timeout=30):
+    sent = client.send(room, f"search -r {query}")
+    seen = False
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        data = client.sync(since, 5000)
+        since = data["next_batch"]
+        events = data.get("rooms", {}).get("join", {}).get(room, {}).get("timeline", {}).get("events", [])
+        for ev in events:
+            if ev.get("event_id") == sent:
+                seen = True
+                continue
+            if seen and ev.get("sender") == bot and ev.get("type") == "m.room.message":
+                return event_content(ev).get("body", "")
+    return None
+
+
 def read_env_value(path, key):
     p = Path(path)
     if not p.exists():
@@ -152,6 +169,7 @@ def main():
     ap.add_argument("--homeserver", default=os.environ.get("MATRIX_HOMESERVER_URL", "http://127.0.0.1:8008"))
     ap.add_argument("--token", default=os.environ.get("MATRIX_ACCESS_TOKEN", ""))
     ap.add_argument("--env-file", default=".env")
+    ap.add_argument("--search", default=None, help="après la connexion, fait connaître cet utilisateur Telegram au compte (ex. @mon_bot)")
     ap.add_argument("--timeout", type=int, default=600, help="durée maximale en secondes (défaut : 600)")
     ap.add_argument("--debug", action="store_true", help="affiche chaque évènement reçu (diagnostic)")
     args = ap.parse_args()
@@ -258,6 +276,15 @@ def main():
     print("Connexion réussie")
     if kind in DEFAULT_BOTS:
         write_env_value(args.env_file, kind.upper() + "_CONNECTED", "1")
+    if kind == "telegram" and args.search:
+        reply = search_remote(client, room, bot, since, args.search)
+        if reply is None:
+            print(f"Recherche de {args.search} sans réponse")
+        elif re.search(r"no results", reply, re.I):
+            print(f"{args.search} introuvable sur Telegram")
+        else:
+            write_env_value(args.env_file, "TELEGRAM_BOT_KNOWN", "1")
+            print(f"{args.search} connu du compte Telegram")
     found = UUID_RE.search(result[1])
     if kind == "signal" and found:
         current = read_env_value(args.env_file, "SIGNAL_RELAY_LOGIN_ID")

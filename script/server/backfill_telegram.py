@@ -91,6 +91,10 @@ def main() -> int:
             print(f"Telegram bloque la création de groupes : {e}")
             print(f"Arrêt après {done} salons configurés, {len(pending) - index + 1} restants")
             return 2
+        except ab.ConfigurationError as e:
+            print(e)
+            print(f"Arrêt après {done} salons configurés, {len(pending) - index + 1} restants")
+            return 2
         except ab.TelegramRateLimit as e:
             failed += 1
             print(f"[{index}/{len(pending)}] {name} : limite Telegram, {e}")

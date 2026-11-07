@@ -182,6 +182,10 @@ if [ "$(env_get TELEGRAM_ENABLED)" != 0 ]; then
     env_set TELEGRAM_ENABLED 1
     tg_bot="$(env_get TELEGRAM_BOT_TOKEN)"
     env_set TELEGRAM_BOT_ID "${tg_bot%%:*}"
+    if is_placeholder "$(env_get TELEGRAM_BOT_USERNAME)"; then
+      tg_name="$(printf 'url = "https://api.telegram.org/bot%s/getMe"\n' "$tg_bot" | curl -fsS --max-time 15 -K - 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["username"])' 2>/dev/null || true)"
+      if [ -n "$tg_name" ]; then env_set TELEGRAM_BOT_USERNAME "$tg_name"; else say "nom du bot introuvable"; fi
+    fi
   elif [ "$(env_get TELEGRAM_ENABLED)" != 0 ]; then
     say "telegram : api_id, api_hash et token du bot requis"
   fi
@@ -650,6 +654,11 @@ connect_bridge signal
 connect_bridge whatsapp
 if [ "$TELEGRAM_ON" = 1 ]; then
   connect_bridge telegram
+  if [ "$(env_get TELEGRAM_CONNECTED)" = 1 ] && [ "$(env_get TELEGRAM_BOT_KNOWN)" != 1 ] \
+     && ! is_placeholder "$(env_get TELEGRAM_BOT_USERNAME)" && [ "${SETUP_SKIP_LOGIN:-}" != 1 ]; then
+    MATRIX_ACCESS_TOKEN="$(env_get MATRIX_ACCESS_TOKEN)" py ../script/server/bridge_login.py telegram \
+      --search "@$(env_get TELEGRAM_BOT_USERNAME)" --homeserver "$HS_URL" --env-file "$ENV_FILE" || say "bot relais non confirmé"
+  fi
 fi
 
 relay="$(env_get SIGNAL_RELAY_LOGIN_ID)"

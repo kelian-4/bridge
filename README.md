@@ -151,6 +151,8 @@ Pour chaque nouveau salon WhatsApp, le service `auto-bridge-telegram` (`auto_bri
 4. appelle l'API de provisionnement du bridge, `POST /_matrix/provision/v1/portal/<salon>/create`, qui crée un supergroupe privé pour ce salon ;
 5. ajoute les fantômes de `TELEGRAM_EXTRA_GHOSTS`, sans bloquer si l'ajout échoue.
 
+Le compte Telegram doit **connaître** le bot relais, sinon le bridge ne peut pas l'ajouter au groupe (« Failed to add the following users to the chat », puis « Not enough Telegram users »). Après la connexion, `setup.sh` obtient le nom du bot auprès de Telegram (`getMe`) et envoie `search -r @nom_du_bot` dans la discussion avec le bot du pont, ce qui le fait découvrir. À refaire à la main si besoin, dans cette discussion : `search -r @nom_du_bot`.
+
 La création passe par l'API HTTP et non par une commande `!tg` : aucun message n'est envoyé dans le salon, donc rien ne peut être relayé vers WhatsApp. Le secret de l'API est `TELEGRAM_PROVISIONING_SECRET`, et le port est publié sur `127.0.0.1` seulement.
 
 ```bash

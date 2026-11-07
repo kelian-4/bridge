@@ -72,6 +72,10 @@ class BridgeCommandError(Exception):
         self.sync_token = sync_token
 
 
+class ConfigurationError(BridgeCommandError):
+    pass
+
+
 class BridgeCommandTimeout(Exception):
     def __init__(self, message: str, sync_token: str | None = None) -> None:
         super().__init__(message)
@@ -431,6 +435,11 @@ def create_telegram_chat(room_id: str, sync_token: str | None = None) -> None:
     limit = telegram_limit_error(text, sync_token)
     if limit:
         raise limit
+    if "not enough telegram users" in text.lower():
+        raise ConfigurationError(
+            "Le compte Telegram ne connaît pas le bot relais. Dans la discussion avec le bot du pont, envoie : search -r @nom_du_bot",
+            sync_token,
+        )
     if errcode == "shared_secret_invalid":
         raise BridgeCommandError("Secret de provisionnement refusé", sync_token)
     if errcode == "not_logged_in_real_account":
