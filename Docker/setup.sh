@@ -161,6 +161,18 @@ for kind in signal whatsapp telegram; do
 done
 case "$(env_get INVITER_USER_ID)" in @inviter:*|"") env_set INVITER_USER_ID "@whatsappbot:$SERVER_NAME";; *":$SERVER_NAME") ;; *) env_set INVITER_USER_ID "@whatsappbot:$SERVER_NAME";; esac
 
+tg_bot_username() {
+  local token="$1" out name n
+  for n in 1 2 3; do
+    out="$(printf 'url = "https://api.telegram.org/bot%s/getMe"\n' "$token" | curl -sS --max-time 20 -K - 2>&1 || true)"
+    name="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["username"])' 2>/dev/null || true)"
+    if [ -n "$name" ]; then printf '%s' "$name"; return 0; fi
+    sleep 2
+  done
+  say "getMe : $(printf '%s' "${out//$token/***}" | head -c 160)" >&2
+  return 1
+}
+
 TELEGRAM_ON=0
 if [ "$(env_get TELEGRAM_ENABLED)" != 0 ]; then
   tg_id="$(env_get TELEGRAM_API_ID)"
@@ -183,8 +195,14 @@ if [ "$(env_get TELEGRAM_ENABLED)" != 0 ]; then
     tg_bot="$(env_get TELEGRAM_BOT_TOKEN)"
     env_set TELEGRAM_BOT_ID "${tg_bot%%:*}"
     if is_placeholder "$(env_get TELEGRAM_BOT_USERNAME)"; then
-      tg_name="$(printf 'url = "https://api.telegram.org/bot%s/getMe"\n' "$tg_bot" | curl -fsS --max-time 15 -K - 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["username"])' 2>/dev/null || true)"
-      if [ -n "$tg_name" ]; then env_set TELEGRAM_BOT_USERNAME "$tg_name"; else say "nom du bot introuvable"; fi
+      if tg_name="$(tg_bot_username "$tg_bot")"; then
+        env_set TELEGRAM_BOT_USERNAME "$tg_name"
+      elif [ -t 0 ] && [ "${SETUP_YES:-}" != 1 ]; then
+        tg_name="$(ask TELEGRAM_BOT_USERNAME "Nom d'utilisateur du bot : " '^@?[A-Za-z0-9_]{5,}$')"
+        env_set TELEGRAM_BOT_USERNAME "${tg_name#@}"
+      else
+        say "nom du bot introuvable"
+      fi
     fi
   elif [ "$(env_get TELEGRAM_ENABLED)" != 0 ]; then
     say "telegram : api_id, api_hash et token du bot requis"
