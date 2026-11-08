@@ -1,0 +1,75 @@
+diff --git a/pkg/connector/config.go b/pkg/connector/config.go
+index 2445647..a2e14d6 100644
+--- a/pkg/connector/config.go
++++ b/pkg/connector/config.go
+@@ -40,6 +40,7 @@ type Config struct {
+ 	EnableStatusBroadcast       bool          `yaml:"enable_status_broadcast"`
+ 	DisableStatusBroadcastSend  bool          `yaml:"disable_status_broadcast_send"`
+ 	MuteStatusBroadcast         bool          `yaml:"mute_status_broadcast"`
++	StatusBroadcastMaxMediaMB   int           `yaml:"status_broadcast_max_media_mb"`
+ 	StatusBroadcastTag          event.RoomTag `yaml:"status_broadcast_tag"`
+ 	PinnedTag                   event.RoomTag `yaml:"pinned_tag"`
+ 	ArchiveTag                  event.RoomTag `yaml:"archive_tag"`
+@@ -109,6 +110,7 @@ func upgradeConfig(helper up.Helper) {
+ 	helper.Copy(up.Bool, "enable_status_broadcast")
+ 	helper.Copy(up.Bool, "disable_status_broadcast_send")
+ 	helper.Copy(up.Bool, "mute_status_broadcast")
++	helper.Copy(up.Int, "status_broadcast_max_media_mb")
+ 	helper.Copy(up.Str|up.Null, "status_broadcast_tag")
+ 	helper.Copy(up.Str|up.Null, "pinned_tag")
+ 	helper.Copy(up.Str|up.Null, "archive_tag")
+diff --git a/pkg/connector/example-config.yaml b/pkg/connector/example-config.yaml
+index 564f25e..c5a85c4 100644
+--- a/pkg/connector/example-config.yaml
++++ b/pkg/connector/example-config.yaml
+@@ -35,6 +35,9 @@ disable_status_broadcast_send: true
+ # Should the status broadcast room be muted and moved into low priority by default?
+ # This is only applied when creating the room, the user can unmute it later.
+ mute_status_broadcast: true
++# Maximum size in MB of media in status messages. Larger media is neither downloaded nor bridged.
++# Zero disables the limit.
++status_broadcast_max_media_mb: 0
+ # Tag to apply to pinned chats on WhatsApp.
+ pinned_tag: m.favourite
+ # Tag to apply to archived chats on WhatsApp.
+diff --git a/pkg/connector/handlewhatsapp.go b/pkg/connector/handlewhatsapp.go
+index 3abcede..3934536 100644
+--- a/pkg/connector/handlewhatsapp.go
++++ b/pkg/connector/handlewhatsapp.go
+@@ -312,6 +312,16 @@ func (wa *WhatsAppClient) handleWAMessage(ctx context.Context, evt *events.Messa
+ 	if evt.Info.Chat == types.StatusBroadcastJID && !wa.Main.Config.EnableStatusBroadcast {
+ 		return
+ 	}
++	if evt.Info.Chat == types.StatusBroadcastJID && wa.Main.Config.StatusBroadcastMaxMediaMB > 0 {
++		limit := uint64(wa.Main.Config.StatusBroadcastMaxMediaMB) * 1024 * 1024
++		if size := statusMediaLength(evt.Message); size > limit {
++			wa.UserLogin.Log.Info().
++				Str("message_id", evt.Info.ID).
++				Uint64("size", size).
++				Msg("Skipping oversized status media")
++			return
++		}
++	}
+ 	parsedMessageType := getMessageType(evt.Message)
+ 	if encReact := evt.Message.GetEncReactionMessage(); encReact != nil {
+ 		decrypted, err := wa.Client.DecryptReaction(ctx, evt)
+@@ -914,3 +924,19 @@ func (wa *WhatsAppClient) handleWAAppStateSyncError(ctx context.Context, evt *ev
+ 		}
+ 	}()
+ }
++
++func statusMediaLength(msg *waE2E.Message) uint64 {
++	switch {
++	case msg.GetImageMessage() != nil:
++		return msg.GetImageMessage().GetFileLength()
++	case msg.GetVideoMessage() != nil:
++		return msg.GetVideoMessage().GetFileLength()
++	case msg.GetAudioMessage() != nil:
++		return msg.GetAudioMessage().GetFileLength()
++	case msg.GetDocumentMessage() != nil:
++		return msg.GetDocumentMessage().GetFileLength()
++	case msg.GetStickerMessage() != nil:
++		return msg.GetStickerMessage().GetFileLength()
++	}
++	return 0
++}

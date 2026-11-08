@@ -55,6 +55,11 @@
 
   services.mautrix-whatsapp = {
   enable = true;
+  package = pkgs.mautrix-whatsapp.overrideAttrs (old: {
+    patches = (old.patches or [ ]) ++ [
+      ./0002-status-media-limit.patch
+    ];
+  });
   settings = {
     homeserver = {
       address = "http://localhost:8008";
@@ -94,9 +99,10 @@
       call_start_notices = true;
       identity_change_notices = true;
       send_presence_on_typing = true;
-      enable_status_broadcast = false;
-      disable_status_broadcast_send = false;
+      enable_status_broadcast = true;
+      disable_status_broadcast_send = true;
       mute_status_broadcast = true;
+      status_broadcast_max_media_mb = 5;
       pinned_tag = "m.favourite";
       status_broadcast_tag = "m.lowpriority";
       whatsapp_thumbnail = false;
