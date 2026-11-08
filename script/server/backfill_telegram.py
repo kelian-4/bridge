@@ -54,13 +54,13 @@ def main() -> int:
     except ab.BridgeCommandError as e:
         print(e)
         return 1
-    pending = groups["pending"]
+    pending = groups["pending"] + groups["linked"]
     if args.limit > 0:
         pending = pending[: args.limit]
 
-    print(f"Salons WhatsApp à traiter : {len(groups['pending'])}")
+    print(f"Salons WhatsApp à traiter : {len(groups['pending']) + len(groups['linked'])}")
+    print(f"Dont déjà reliés à Telegram : {len(groups['linked'])}")
     print(f"Déjà configurés : {len(groups['configured'])}")
-    print(f"Déjà reliés à Telegram : {len(groups['linked'])}")
     print(f"Ignorés : {len(groups['skipped'])}")
     minutes = round(len(pending) * ab.CREATE_DELAY / 60)
     print(f"Durée estimée pour {len(pending)} salons : {minutes} min")

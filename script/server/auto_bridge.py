@@ -410,6 +410,17 @@ def portal_exists(room_id: str) -> bool:
     return True
 
 
+def chat_was_created(room_id: str) -> bool:
+    time.sleep(2)
+    try:
+        created = portal_exists(room_id)
+    except (BridgeCommandError, requests.RequestException):
+        return False
+    if created:
+        log.warning("Réponse de l'API perdue, mais le chat Telegram existe")
+    return created
+
+
 def create_telegram_chat(room_id: str, sync_token: str | None = None) -> None:
     try:
         resp = requests.post(
@@ -417,8 +428,12 @@ def create_telegram_chat(room_id: str, sync_token: str | None = None) -> None:
             headers=provisioning_headers(), timeout=CREATE_TIMEOUT,
         )
     except requests.Timeout:
+        if chat_was_created(room_id):
+            return
         raise BridgeCommandTimeout(f"Pas de réponse de l'API de provisionnement après {CREATE_TIMEOUT}s", sync_token)
     except requests.RequestException as e:
+        if chat_was_created(room_id):
+            return
         raise BridgeCommandError(f"API de provisionnement injoignable : {describe_error(e)}", sync_token)
 
     if resp.status_code in (200, 201):
@@ -428,6 +443,8 @@ def create_telegram_chat(room_id: str, sync_token: str | None = None) -> None:
         errcode, text = str(body.get("errcode", "")), str(body.get("error", ""))
     except ValueError:
         errcode, text = "", resp.text[:200]
+        if resp.status_code >= 500 and chat_was_created(room_id):
+            return
 
     if errcode == "room_already_bridged":
         log.info("Le salon est déjà relié à un chat Telegram")
@@ -462,8 +479,8 @@ def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str
         log.info("Salon déjà configuré")
         return sync_token
     if stage is None and portal_exists(room_id):
-        log.info("Salon déjà relié à Telegram")
-        return sync_token
+        log.info("Salon déjà relié à Telegram, fin de la configuration")
+        stage = "created"
 
     log.info("Nom : %s", client.get_room_name(room_id) or room_id)
     if stage:
