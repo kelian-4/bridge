@@ -36,6 +36,7 @@ ERROR_KEYWORDS = ("error", "failed", "⚠", "not found", "invalid")
 CREATE_GROUP_SUCCESS_MARKER = "successfully created group"
 
 CONFIGURED_STATE_TYPE = "fr.kelian.auto_bridge_signal"
+STATUS_BROADCAST_NAME = "WhatsApp Status Broadcast"
 
 SYNC_TIMEOUT_MS = 30_000
 
@@ -279,11 +280,15 @@ def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str
     client.join_room(room_id)
     log.info("  Rejoint le salon.")
 
+    room_name = client.get_room_name(room_id) or room_id
+    if room_name == STATUS_BROADCAST_NAME:
+        log.info("  Salon des statuts WhatsApp ignoré.")
+        return sync_token
+
     log.info("  Auto-promotion en admin du salon (via API admin Synapse)")
     client.make_room_admin(room_id)
     log.info("  Promotion réussie.")
 
-    room_name = client.get_room_name(room_id) or room_id
     log.info("  Nom du salon: %s", room_name)
 
     already_configured = client.get_state_event(room_id, CONFIGURED_STATE_TYPE)

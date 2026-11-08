@@ -30,13 +30,14 @@ network:
     # Full presence bridging is not supported.
     send_presence_on_typing: true
     # Should WhatsApp status messages be bridged into a Matrix room?
-    enable_status_broadcast: false
+    enable_status_broadcast: true
     # Should sending WhatsApp status messages be allowed?
     # This can cause issues if the user has lots of contacts, so it's disabled by default.
-    disable_status_broadcast_send: false
+    disable_status_broadcast_send: true
     # Should the status broadcast room be muted and moved into low priority by default?
     # This is only applied when creating the room, the user can unmute it later.
     mute_status_broadcast: true
+    status_broadcast_max_media_mb: 5
     # Tag to apply to pinned chats on WhatsApp.
     pinned_tag: "m.favourite"
     # Tag to apply to archived chats on WhatsApp.

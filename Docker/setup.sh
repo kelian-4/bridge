@@ -255,7 +255,7 @@ fi
 
 img() { local v; v="$(env_get "$1")"; if [ -n "$v" ]; then echo "$v"; else echo "$2"; fi; }
 SIGNAL_IMG="$(img SIGNAL_IMAGE dock.mau.dev/mautrix/signal:latest)"
-WHATSAPP_IMG="$(img WHATSAPP_IMAGE dock.mau.dev/mautrix/whatsapp:latest)"
+WHATSAPP_IMG="$(img WHATSAPP_IMAGE bridge/mautrix-whatsapp:v0.2610.0-statuslimit)"
 TELEGRAM_IMG="$(img TELEGRAM_IMAGE dock.mau.dev/mautrix/telegram:v0.15.3)"
 SYNAPSE_IMG="$(img SYNAPSE_IMAGE matrixdotorg/synapse:latest)"
 POSTGRES_IMG="$(img POSTGRES_IMAGE postgres:16-alpine)"
@@ -297,7 +297,14 @@ pull_image "$YQ_IMAGE"
 [ "${EXT[postgres]}" = 1 ] || pull_image "$POSTGRES_IMG"
 [ "${EXT[synapse]}" = 1 ] || pull_image "$SYNAPSE_IMG"
 [ "${EXT[mautrix-signal]}" = 1 ] || pull_image "$SIGNAL_IMG"
-[ "${EXT[mautrix-whatsapp]}" = 1 ] || pull_image "$WHATSAPP_IMG"
+build_whatsapp() {
+  "${DOCKER[@]}" image inspect "$WHATSAPP_IMG" >/dev/null 2>&1 && return 0
+  say "Construction de mautrix-whatsapp"
+  quiet "${DOCKER[@]}" build -t "$WHATSAPP_IMG" whatsapp-build || die "construction de mautrix-whatsapp impossible"
+}
+if [ "${EXT[mautrix-whatsapp]}" = 0 ]; then
+  if [ -z "$(env_get WHATSAPP_IMAGE)" ]; then build_whatsapp; else pull_image "$WHATSAPP_IMG"; fi
+fi
 if [ "$TELEGRAM_ON" = 1 ] && [ "${EXT[mautrix-telegram]}" = 0 ]; then pull_image "$TELEGRAM_IMG"; fi
 if [ "${EXT[auto-bridge-signal]}" = 0 ] || { [ "$TELEGRAM_ON" = 1 ] && [ "${EXT[auto-bridge-telegram]}" = 0 ]; }; then pull_image "python:3.12-slim"; fi
 

@@ -53,6 +53,7 @@ WA_RELAY_MARKER = os.environ.get("WHATSAPP_RELAY_MARKER", "will now be relayed")
 MAX_ROOM_ATTEMPTS = int(os.environ.get("MAX_ROOM_ATTEMPTS", "3"))
 ROOM_RETRY_DELAY = float(os.environ.get("ROOM_RETRY_DELAY", "300"))
 CONFIGURED_STATE_TYPE = "fr.kelian.auto_bridge_telegram_v1"
+STATUS_BROADCAST_NAME = "WhatsApp Status Broadcast"
 WHATSAPP_PROTOCOL = os.environ.get("WHATSAPP_PROTOCOL_ID", "whatsapp")
 BRIDGE_INFO_TYPES = ("m.bridge", "uk.half-shot.bridge")
 PROTOCOL_WAIT = int(os.environ.get("PROTOCOL_WAIT", "15"))
@@ -467,6 +468,10 @@ def create_telegram_chat(room_id: str, sync_token: str | None = None) -> None:
 def process_new_room(client: MatrixClient, room_id: str, sync_token: str) -> str:
     log.info("Salon %s", room_id)
     client.join_room(room_id)
+
+    if client.get_room_name(room_id) == STATUS_BROADCAST_NAME:
+        log.info("Salon des statuts WhatsApp ignoré")
+        return sync_token
 
     info = room_info(client, room_id)
     if WHATSAPP_PROTOCOL not in info.protocols or info.space:

@@ -63,7 +63,7 @@ services:
       - "127.0.0.1:8008:8008"
 
   mautrix-whatsapp:
-    image: ${WHATSAPP_IMAGE:-dock.mau.dev/mautrix/whatsapp:latest}
+    image: ${WHATSAPP_IMAGE:-bridge/mautrix-whatsapp:v0.2610.0-statuslimit}
     profiles: ["local-whatsapp"]
     container_name: mautrix-whatsapp
     restart: unless-stopped
