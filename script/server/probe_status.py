@@ -47,20 +47,23 @@ def read_room(client, room_id):
     state = client.get(f"/_matrix/client/v3/rooms/{quote(room_id)}/state")
     name = ""
     members = set()
+    states = {}
     channels = {}
     for event in state:
         kind = event.get("type")
         content = event.get("content") or {}
         if kind == "m.room.name":
             name = content.get("name", "")
-        elif kind == "m.room.member" and content.get("membership") == "join":
-            members.add(event.get("state_key", ""))
+        elif kind == "m.room.member":
+            states[event.get("state_key", "")] = content.get("membership", "")
+            if content.get("membership") == "join":
+                members.add(event.get("state_key", ""))
         elif kind in BRIDGE_TYPES:
             protocol = (content.get("protocol") or {}).get("id")
             channel = (content.get("channel") or {}).get("id")
             if protocol and channel:
                 channels.setdefault(protocol, channel)
-    return {"name": name, "members": members, "channels": channels}
+    return {"name": name, "members": members, "states": states, "channels": channels}
 
 
 def human_size(size):
@@ -74,6 +77,8 @@ def main():
     parser.add_argument("--homeserver", default=os.environ.get("MATRIX_HOMESERVER_URL", "http://127.0.0.1:8008"))
     parser.add_argument("--token", default=os.environ.get("MATRIX_ACCESS_TOKEN", ""))
     parser.add_argument("--limit", type=int, default=30)
+    parser.add_argument("--sender", default="")
+    parser.add_argument("--names", action="store_true")
     args = parser.parse_args()
     if not args.token:
         fail("MATRIX_ACCESS_TOKEN manquant")
@@ -83,6 +88,31 @@ def main():
     status_id = next((room_id for room_id, info in rooms.items() if info["name"] == STATUS_NAME), None)
     if status_id is None:
         fail("Salon des statuts introuvable")
+
+    if args.sender:
+        digits = re.sub(r"\D", "", args.sender.split(":")[0])
+        print(f"Expéditeur : {tag('s-', args.sender)}")
+        found = 0
+        for room_id, info in rooms.items():
+            if room_id == status_id:
+                continue
+            channel = info["channels"].get("whatsapp", "")
+            same = bool(digits) and channel.split("@")[0] == digits
+            state = info["states"].get(args.sender, "")
+            if not same and not state:
+                continue
+            found += 1
+            kind = channel.split("@")[-1] if "@" in channel else "?"
+            signal = info["channels"].get("signal")
+            label = f"  {info['name']!r}" if args.names else ""
+            print(
+                f"  {tag('r-', room_id)} {kind or '?'} {'meme-id' if same else 'id-different'}"
+                f" statut-du-fantome:{state or 'absent'} {len(info['members'])}m"
+                f" {'signal/' + tag('g-', signal) if signal else 'sans-signal'} bridge-whatsapp:{'oui' if channel else 'non'}{label}"
+            )
+        if not found:
+            print("  aucun salon lié à cet expéditeur")
+        return
 
     by_member = {}
     for room_id, info in rooms.items():
