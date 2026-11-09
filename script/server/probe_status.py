@@ -114,54 +114,54 @@ def main():
             print("  aucun salon lié à cet expéditeur")
         return
 
-    by_member = {}
+    by_lid = {}
     for room_id, info in rooms.items():
-        if room_id == status_id or "whatsapp" not in info["channels"]:
+        channel = info["channels"].get("whatsapp", "")
+        if room_id == status_id or not channel.endswith("@lid"):
             continue
-        for member in info["members"]:
-            by_member.setdefault(member, []).append(room_id)
+        by_lid.setdefault(channel.split("@")[0], []).append(room_id)
 
     history = client.get(f"/_matrix/client/v3/rooms/{quote(status_id)}/messages?dir=b&limit={args.limit}")
     events = [event for event in history.get("chunk", []) if event.get("type") == "m.room.message"]
     print(f"Salon des statuts : {tag('r-', status_id)}")
     print(f"Statuts lus : {len(events)}")
 
-    counts = {"un": 0, "aucun": 0, "plusieurs": 0, "sans_signal": 0, "sans_salon": 0}
+    senders = {}
     for event in events:
         sender = event.get("sender", "")
-        content = event.get("content") or {}
+        size = (event.get("content") or {}).get("info", {}).get("size")
+        entry = senders.setdefault(sender, {"count": 0, "max": 0})
+        entry["count"] += 1
+        if isinstance(size, int):
+            entry["max"] = max(entry["max"], size)
+
+    counts = {"signal": 0, "sans_signal": 0, "aucun": 0, "plusieurs": 0}
+    for sender, entry in senders.items():
         local = sender.split(":")[0].lstrip("@")
-        shape = re.sub(r"\d", "N", local)
-        digits = re.sub(r"\D", "", local)
-        details = []
-        direct_signal = []
-        for room_id in by_member.get(sender, []):
-            info = rooms[room_id]
-            channel = info["channels"]["whatsapp"]
-            kind = channel.split("@")[-1] if "@" in channel else "?"
-            same = "meme-id" if digits and channel.split("@")[0] == digits else "id-different"
-            has_signal = "signal" in info["channels"]
-            details.append(f"{tag('r-', room_id)} {kind} {same} {len(info['members'])}m {'signal/' + tag('g-', info['channels']['signal']) if has_signal else 'sans-signal'}")
-            if has_signal and kind != "g.us":
-                direct_signal.append(room_id)
-        if direct_signal:
-            key = "un" if len(direct_signal) == 1 else "plusieurs"
-        elif details:
+        digits = local.rsplit("-", 1)[-1] if "lid-" in local else re.sub(r"\D", "", local)
+        candidates = by_lid.get(digits, [])
+        with_signal = [room_id for room_id in candidates if "signal" in rooms[room_id]["channels"]]
+        if len(with_signal) > 1 or len(candidates) > 1:
+            key = "plusieurs"
+        elif with_signal:
+            key = "signal"
+        elif candidates:
             key = "sans_signal"
         else:
-            key = "sans_salon"
+            key = "aucun"
         counts[key] += 1
-        print(
-            f"  {tag('s-', sender)}  {content.get('msgtype', '?'):<10} {human_size((content.get('info') or {}).get('size')):<16}"
-            f" forme {shape}"
-        )
-        for line in details:
-            print(f"      {line}")
-        if not details:
-            print("      aucun salon WhatsApp")
+        if candidates:
+            detail = ", ".join(
+                f"{tag('r-', room_id)} {len(rooms[room_id]['members'])}m "
+                + (f"signal/{tag('g-', rooms[room_id]['channels']['signal'])}" if room_id in with_signal else "sans-signal")
+                for room_id in candidates
+            )
+        else:
+            detail = "aucune discussion lid"
+        print(f"  {tag('s-', sender)}  {entry['count']} statut(s), max {human_size(entry['max'] or None)}  ->  {detail}")
     print(
-        f"Bilan : {counts['un']} avec un salon Signal direct, {counts['plusieurs']} ambigus, "
-        f"{counts['sans_signal']} avec un salon WhatsApp sans Signal, {counts['sans_salon']} sans aucun salon"
+        f"Bilan sur {len(senders)} expéditeurs : {counts['signal']} avec un groupe Signal, "
+        f"{counts['sans_signal']} avec une discussion sans Signal, {counts['aucun']} sans discussion, {counts['plusieurs']} ambigus"
     )
 
 
