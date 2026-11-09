@@ -86,7 +86,7 @@ def main():
 
     by_member = {}
     for room_id, info in rooms.items():
-        if room_id == status_id or "signal" not in info["channels"]:
+        if room_id == status_id or "whatsapp" not in info["channels"]:
             continue
         for member in info["members"]:
             by_member.setdefault(member, []).append(room_id)
@@ -96,21 +96,43 @@ def main():
     print(f"Salon des statuts : {tag('r-', status_id)}")
     print(f"Statuts lus : {len(events)}")
 
-    counts = {"un": 0, "aucun": 0, "plusieurs": 0}
+    counts = {"un": 0, "aucun": 0, "plusieurs": 0, "sans_signal": 0, "sans_salon": 0}
     for event in events:
         sender = event.get("sender", "")
         content = event.get("content") or {}
         local = sender.split(":")[0].lstrip("@")
         shape = re.sub(r"\d", "N", local)
-        candidates = by_member.get(sender, [])
-        key = "aucun" if not candidates else "un" if len(candidates) == 1 else "plusieurs"
+        digits = re.sub(r"\D", "", local)
+        details = []
+        direct_signal = []
+        for room_id in by_member.get(sender, []):
+            info = rooms[room_id]
+            channel = info["channels"]["whatsapp"]
+            kind = channel.split("@")[-1] if "@" in channel else "?"
+            same = "meme-id" if digits and channel.split("@")[0] == digits else "id-different"
+            has_signal = "signal" in info["channels"]
+            details.append(f"{tag('r-', room_id)} {kind} {same} {len(info['members'])}m {'signal/' + tag('g-', info['channels']['signal']) if has_signal else 'sans-signal'}")
+            if has_signal and kind != "g.us":
+                direct_signal.append(room_id)
+        if direct_signal:
+            key = "un" if len(direct_signal) == 1 else "plusieurs"
+        elif details:
+            key = "sans_signal"
+        else:
+            key = "sans_salon"
         counts[key] += 1
-        groups = ", ".join(f"{tag('r-', c)}/{tag('g-', rooms[c]['channels']['signal'])}" for c in candidates)
         print(
-            f"  {tag('s-', sender)}  {content.get('msgtype', '?'):<10} {human_size((content.get('info') or {}).get('size')):<14}"
-            f" forme {shape}  salons Signal : {len(candidates)}{' (' + groups + ')' if groups else ''}"
+            f"  {tag('s-', sender)}  {content.get('msgtype', '?'):<10} {human_size((content.get('info') or {}).get('size')):<16}"
+            f" forme {shape}"
         )
-    print(f"Bilan : {counts['un']} avec un salon Signal, {counts['aucun']} sans, {counts['plusieurs']} ambigus")
+        for line in details:
+            print(f"      {line}")
+        if not details:
+            print("      aucun salon WhatsApp")
+    print(
+        f"Bilan : {counts['un']} avec un salon Signal direct, {counts['plusieurs']} ambigus, "
+        f"{counts['sans_signal']} avec un salon WhatsApp sans Signal, {counts['sans_salon']} sans aucun salon"
+    )
 
 
 if __name__ == "__main__":
