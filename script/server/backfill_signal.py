@@ -42,6 +42,7 @@ ROOM_PROCESSING_DELAY = float(os.environ.get("ROOM_PROCESSING_DELAY", "2"))
 
 ERROR_KEYWORDS = ("error", "failed", "⚠", "not found", "invalid")
 CREATE_GROUP_SUCCESS_MARKER = "successfully created group"
+STATUS_BROADCAST_NAME = "WhatsApp Status Broadcast"
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -289,6 +290,8 @@ def main() -> None:
             continue  # pas un salon WhatsApp, on ignore
 
         room_name = client.get_room_name(room_id) or room_id
+        if room_name == STATUS_BROADCAST_NAME:
+            continue
 
         if SIGNAL_BOT_MXID not in members:
             to_fix.append((room_id, room_name, "A"))

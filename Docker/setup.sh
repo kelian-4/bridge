@@ -705,6 +705,8 @@ if [ "$TELEGRAM_ON" = 1 ] && [ "${EXT[auto-bridge-telegram]}" = 0 ]; then
   fi
 fi
 
+[ -f ./setup-status.sh ] && . ./setup-status.sh
+
 say "Terminé"
 say "Serveur : $HS_URL"
 say "Compte : $ADMIN_MXID"

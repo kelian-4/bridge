@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import logging
+import mimetypes
+import os
+import re
+import sys
+import time
+import urllib.parse
+from pathlib import Path
+
+import requests
+
+import auto_bridge_signal as ab
+
+SIGNAL_CLI_URL = os.environ.get("SIGNAL_CLI_URL", "http://127.0.0.1:18080")
+SIGNAL_CLI_ACCOUNT = os.environ.get("SIGNAL_CLI_ACCOUNT", "")
+STATE_DIR = Path(os.environ.get("STATUS_STATE_DIR", "/state"))
+POLL_SECONDS = int(os.environ.get("STATUS_POLL_SECONDS", "10"))
+CREATE_DELAY = int(os.environ.get("STATUS_CREATE_DELAY", "30"))
+WAIT_SECONDS = int(os.environ.get("STATUS_WAIT_SECONDS", "180"))
+MAX_ATTEMPTS = int(os.environ.get("STATUS_MAX_ATTEMPTS", "3"))
+SKIP_LIDS = {value.strip() for value in os.environ.get("STATUS_SKIP_LIDS", "").split(",") if value.strip()}
+HISTORY_LIMIT = 50
+DONE_LIMIT = 2000
+MEDIA_TYPES = {"m.image", "m.video"}
+LID_RE = re.compile(r"^@whatsapp_lid-(\d+):")
+STATUS_RESCAN_SECONDS = 60
+
+log = logging.getLogger("auto_status")
+
+
+class StoryError(Exception):
+    pass
+
+
+def quote(value: str) -> str:
+    return urllib.parse.quote(value, safe="")
+
+
+def room_state(client, room_id: str) -> list[dict]:
+    resp = client._request("GET", client._url(f"/_matrix/client/v3/rooms/{quote(room_id)}/state"))
+    resp.raise_for_status()
+    return resp.json()
+
+
+def read_state(state: list[dict]) -> tuple[str, dict[str, str]]:
+    name = ""
+    channels: dict[str, str] = {}
+    for event in state:
+        content = event.get("content") or {}
+        if event.get("type") == "m.room.name":
+            name = content.get("name", "")
+        elif event.get("type") == "m.bridge":
+            protocol = (content.get("protocol") or {}).get("id")
+            channel = (content.get("channel") or {}).get("id")
+            if protocol and channel:
+                channels.setdefault(protocol, channel)
+    return name, channels
+
+
+def signal_group(client, room_id: str) -> str | None:
+    return read_state(room_state(client, room_id))[1].get("signal")
+
+
+def scan(client) -> tuple[str | None, dict[str, tuple[str, str | None]]]:
+    resp = client._request("GET", client._url("/_matrix/client/v3/joined_rooms"))
+    resp.raise_for_status()
+    status_room = None
+    by_lid: dict[str, tuple[str, str | None]] = {}
+    for room_id in resp.json()["joined_rooms"]:
+        try:
+            name, channels = read_state(room_state(client, room_id))
+        except requests.RequestException:
+            continue
+        if name == ab.STATUS_BROADCAST_NAME:
+            status_room = room_id
+            continue
+        whatsapp = channels.get("whatsapp", "")
+        if not whatsapp.endswith("@lid"):
+            continue
+        digits = whatsapp.split("@")[0]
+        group = channels.get("signal")
+        if digits not in by_lid or (group and not by_lid[digits][1]):
+            by_lid[digits] = (room_id, group)
+    return status_room, by_lid
+
+
+def management_room(client) -> str:
+    resp = client._request("GET", client._url("/_matrix/client/v3/joined_rooms"))
+    resp.raise_for_status()
+    wanted = {ab.USER_ID, ab.WHATSAPP_BOT_MXID}
+    for room_id in resp.json()["joined_rooms"]:
+        try:
+            if set(client.get_room_members(room_id)) == wanted:
+                return room_id
+        except requests.RequestException:
+            continue
+    raise StoryError("discussion avec le bot WhatsApp introuvable")
+
+
+def wait_until(check, seconds: int = WAIT_SECONDS, step: int = 5):
+    deadline = time.monotonic() + seconds
+    while True:
+        value = check()
+        if value:
+            return value
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(step)
+
+
+def rpc(method: str, params: dict):
+    try:
+        resp = requests.post(
+            f"{SIGNAL_CLI_URL}/api/v1/rpc",
+            json={"jsonrpc": "2.0", "method": method, "params": params, "id": 1},
+            timeout=180,
+        )
+        body = resp.json()
+    except (requests.RequestException, ValueError):
+        raise StoryError("signal-cli injoignable")
+    if "error" in body:
+        raise StoryError(f"signal-cli : {(body['error'] or {}).get('message', 'erreur')}")
+    return body.get("result")
+
+
+_account: list[str] = []
+
+
+def signal_account() -> str:
+    if SIGNAL_CLI_ACCOUNT:
+        return SIGNAL_CLI_ACCOUNT
+    if not _account:
+        numbers = [item.get("number") for item in (rpc("listAccounts", {}) or []) if item.get("number")]
+        if len(numbers) != 1:
+            raise StoryError("compte signal-cli introuvable")
+        _account.append(numbers[0])
+    return _account[0]
+
+
+def fetch_media(client, content: dict) -> Path:
+    match = re.match(r"mxc://([^/]+)/(.+)$", content.get("url", ""))
+    if not match:
+        raise StoryError("média sans adresse")
+    resp = None
+    for path in (
+        f"/_matrix/client/v1/media/download/{match[1]}/{match[2]}",
+        f"/_matrix/media/v3/download/{match[1]}/{match[2]}",
+    ):
+        resp = client._request("GET", client._url(path))
+        if resp.status_code == 200:
+            break
+    if resp is None or resp.status_code != 200:
+        raise StoryError("média introuvable")
+    extension = mimetypes.guess_extension((content.get("info") or {}).get("mimetype", "")) or ".bin"
+    folder = STATE_DIR / "stories"
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"{match[2]}{extension}"
+    target.write_bytes(resp.content)
+    return target
+
+
+def start_chat(client, digits: str) -> None:
+    room = management_room(client)
+    token = client.sync(since=None, timeout_ms=0)["next_batch"]
+    ab.run_bridge_command(client, room, f"start-chat lid-{digits}", ab.WHATSAPP_BOT_MXID, token)
+
+
+def ensure_signal(client, room_id: str) -> None:
+    token = client.sync(since=None, timeout_ms=0)["next_batch"]
+    ab.process_new_room(client, room_id, token)
+
+
+def handle(client, event: dict, rooms: dict[str, tuple[str, str | None]]) -> dict[str, tuple[str, str | None]]:
+    digits = LID_RE.match(event["sender"])[1]
+    if digits in SKIP_LIDS:
+        log.info("Statut d'un compte exclu ignoré")
+        return rooms
+
+    created = False
+    entry = rooms.get(digits)
+    if entry is None:
+        log.info("Création de la discussion")
+        start_chat(client, digits)
+        created = True
+        entry = wait_until(lambda: scan(client)[1].get(digits))
+        if entry is None:
+            raise StoryError("discussion non créée")
+        rooms[digits] = entry
+
+    room_id, group = entry
+    if not group and created:
+        group = wait_until(lambda: signal_group(client, room_id))
+    if not group:
+        log.info("Création du groupe Signal")
+        ensure_signal(client, room_id)
+        created = True
+        group = wait_until(lambda: signal_group(client, room_id))
+    if not group:
+        raise StoryError("groupe Signal non créé")
+    rooms[digits] = (room_id, group)
+
+    media = fetch_media(client, event.get("content") or {})
+    try:
+        rpc("sendStory", {"account": signal_account(), "attachment": str(media), "groupId": group})
+    finally:
+        media.unlink(missing_ok=True)
+    log.info("Story publiée")
+    if created:
+        time.sleep(CREATE_DELAY)
+    return rooms
+
+
+def load_done() -> list[str] | None:
+    path = STATE_DIR / "status_done.json"
+    if not path.exists():
+        return None
+    try:
+        return list(json.loads(path.read_text()))
+    except (OSError, ValueError):
+        return []
+
+
+def save_done(done: list[str]) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (STATE_DIR / "status_done.json").write_text(json.dumps(done[-DONE_LIMIT:]))
+
+
+def history(client, room_id: str) -> list[dict]:
+    resp = client._request(
+        "GET", client._url(f"/_matrix/client/v3/rooms/{quote(room_id)}/messages?dir=b&limit={HISTORY_LIMIT}")
+    )
+    resp.raise_for_status()
+    events = [event for event in resp.json().get("chunk", []) if event.get("type") == "m.room.message"]
+    return list(reversed(events))
+
+
+def is_story(event: dict) -> bool:
+    content = event.get("content") or {}
+    return content.get("msgtype") in MEDIA_TYPES and bool(LID_RE.match(event.get("sender", "")))
+
+
+def main() -> None:
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s [%(levelname)s] %(message)s", stream=sys.stdout)
+    client = ab.MatrixClient(ab.HOMESERVER_URL, ab.ACCESS_TOKEN, ab.USER_ID)
+    try:
+        client.disable_own_ratelimit()
+    except requests.RequestException:
+        log.warning("Limite de débit inchangée")
+
+    done = load_done()
+    first_run = done is None
+    done = done or []
+    attempts: dict[str, int] = {}
+    status_room = None
+    last_scan = 0.0
+    log.info("Démarrage")
+
+    while True:
+        try:
+            if status_room is None and time.monotonic() - last_scan >= STATUS_RESCAN_SECONDS:
+                status_room = scan(client)[0]
+                last_scan = time.monotonic()
+            if status_room is not None:
+                events = history(client, status_room)
+                if first_run:
+                    done = [event["event_id"] for event in events]
+                    save_done(done)
+                    first_run = False
+                done_set = set(done)
+                pending = [event for event in events if event["event_id"] not in done_set and is_story(event)]
+                if pending:
+                    rooms = scan(client)[1]
+                    for event in pending:
+                        event_id = event["event_id"]
+                        try:
+                            rooms = handle(client, event, rooms)
+                            done.append(event_id)
+                        except (StoryError, ab.BridgeCommandError, ab.BridgeCommandTimeout, requests.RequestException) as error:
+                            attempts[event_id] = attempts.get(event_id, 0) + 1
+                            log.error("Statut non publié : %s", error)
+                            if attempts[event_id] >= MAX_ATTEMPTS:
+                                log.error("Statut abandonné")
+                                done.append(event_id)
+                        save_done(done)
+        except requests.RequestException as error:
+            log.warning("Erreur réseau : %s", error)
+            status_room = None
+        time.sleep(POLL_SECONDS)
+
+
+if __name__ == "__main__":
+    main()

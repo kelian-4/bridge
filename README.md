@@ -195,3 +195,11 @@ Les commandes `!tg` ne sont pas filtrées : le bridge Python ignore une commande
 Le préfixe doit être suivi d'un espace ou de la fin du message : `!wally` et `bonjour !wa` ne sont pas touchés. Les préfixes se changent dans `homeserver.yaml` (`modules`, clé `prefixes`).
 
 Le module ne s'applique qu'au Synapse du dépôt. Un Synapse installé ailleurs doit déclarer le module lui-même.
+
+## Statuts WhatsApp vers stories Signal
+
+Un statut reçu dans le salon des statuts est republié comme story dans le groupe Signal du contact. La discussion et le groupe sont créés s'ils manquent, avec une pause entre deux créations.
+
+`./Docker/setup.sh` construit signal-cli, affiche un code à scanner avec le compte Signal du pont, puis démarre `auto-status`. Sans terminal, relancer le script plus tard. `SETUP_SKIP_STATUS=1` désactive cette étape.
+
+Variables optionnelles : `STATUS_SKIP_LIDS` (identifiants exclus, séparés par des virgules), `STATUS_CREATE_DELAY` (secondes entre deux créations).

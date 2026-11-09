@@ -19,6 +19,8 @@ def classify(client: ab.MatrixClient, rooms: list[str]) -> dict[str, list[str]]:
             continue
         if ab.WHATSAPP_PROTOCOL not in info.protocols or info.space:
             continue
+        if label(client, room_id) == ab.STATUS_BROADCAST_NAME:
+            continue
         stage = ab.get_stage(client, room_id)
         if stage == "configured":
             result["configured"].append(room_id)

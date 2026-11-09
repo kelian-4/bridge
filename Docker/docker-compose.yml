@@ -164,8 +164,44 @@ services:
       - ../script/server:/app:ro
       - auto_bridge_state:/state
 
+  signal-cli:
+    build: ./signal-cli
+    image: bridge/signal-cli:0.14.6
+    profiles: ["local-status"]
+    container_name: signal-cli
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - signal_cli_data:/data
+      - auto_bridge_state:/state:ro
+
+  auto-status:
+    build: ./auto-bridge
+    profiles: ["local-status"]
+    container_name: auto-status
+    restart: unless-stopped
+    depends_on:
+      synapse:
+        condition: service_started
+        required: false
+      signal-cli:
+        condition: service_started
+        required: false
+    env_file:
+      - ../.env
+    network_mode: host
+    command: ["auto_status.py"]
+    environment:
+      REQUIRED_VARS: MATRIX_ACCESS_TOKEN SIGNAL_RELAY_LOGIN_ID SIGNAL_CLI_ACCOUNT
+      SERVICE_NAME: auto-status
+      STATUS_STATE_DIR: /state
+    volumes:
+      - ../script/server:/app:ro
+      - auto_bridge_state:/state
+
 volumes:
   auto_bridge_state:
+  signal_cli_data:
 
 secrets:
   postgres_password:
