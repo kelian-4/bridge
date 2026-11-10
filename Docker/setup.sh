@@ -301,7 +301,7 @@ build_image() {
   local tag="$1" dir="$2" label="$3" out
   if out="$("${DOCKER[@]}" build -t "$tag" "$dir" 2>&1)"; then return 0; fi
   [ "${SETUP_DEBUG:-}" = 1 ] && printf '%s\n' "$out" | tail -n 20 >&2
-  if printf '%s' "$out" | grep -qiE 'tls handshake|i/o timeout|temporary failure|could not resolve|no such host|network is unreachable|connection refused|failed to fetch anonymous token'; then
+  if printf '%s' "$out" | grep -qiE 'tls handshake|i/o timeout|temporary failure|could not resolve|no such host|network is unreachable|connection refused|failed to fetch anonymous token|curl: \([0-9]+\)|did not match'; then
     echo "Erreur : construction de $label impossible, téléchargement interrompu" >&2
   else
     echo "Erreur : construction de $label impossible" >&2
