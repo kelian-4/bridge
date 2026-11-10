@@ -3,9 +3,16 @@ FROM eclipse-temurin:25-jre
 ARG SIGNAL_CLI_VERSION=0.14.6
 ARG SIGNAL_CLI_SHA256=e90f4faea709b3c0a55909646a2b94289b9779ba9c8fd5c6eaa847d3f67312eb
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates qrencode \
-    && rm -rf /var/lib/apt/lists/*
+RUN set -e; ok=0; \
+    for attempt in 1 2 3 4 5; do \
+        if apt-get -o Acquire::Retries=5 update \
+            && apt-get -o Acquire::Retries=5 install -y --no-install-recommends --fix-missing curl ca-certificates qrencode; then \
+            ok=1; break; \
+        fi; \
+        sleep 5; \
+    done; \
+    [ "$ok" = 1 ]; \
+    rm -rf /var/lib/apt/lists/*
 
 RUN curl -fL --connect-timeout 30 --retry 8 --retry-delay 5 --retry-all-errors -C - \
         -o /tmp/signal-cli.tar.gz \

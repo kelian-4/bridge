@@ -301,7 +301,7 @@ build_image() {
   local tag="$1" dir="$2" label="$3" out
   if out="$("${DOCKER[@]}" build -t "$tag" "$dir" 2>&1)"; then return 0; fi
   printf '%s\n' "$out" > .build.log
-  if printf '%s' "$out" | grep -qiE 'tls handshake|i/o timeout|temporary failure|could not resolve|no such host|network is unreachable|connection refused|failed to fetch anonymous token|curl: \([0-9]+\)|did not match'; then
+  if printf '%s' "$out" | grep -qiE 'tls handshake|i/o timeout|temporary failure|could not resolve|no such host|network is unreachable|connection refused|failed to fetch|unable to fetch some archives|curl: \([0-9]+\)|did not match'; then
     echo "Erreur : construction de $label impossible, téléchargement interrompu, détail dans Docker/.build.log" >&2
   else
     echo "Erreur : construction de $label impossible, détail dans Docker/.build.log" >&2
