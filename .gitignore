@@ -19,3 +19,5 @@ Docker/synapse/media_store/
 Docker/-c
 Docker/-d
 __pycache__/
+
+Docker/.build.log
