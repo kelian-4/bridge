@@ -297,10 +297,22 @@ pull_image "$YQ_IMAGE"
 [ "${EXT[postgres]}" = 1 ] || pull_image "$POSTGRES_IMG"
 [ "${EXT[synapse]}" = 1 ] || pull_image "$SYNAPSE_IMG"
 [ "${EXT[mautrix-signal]}" = 1 ] || pull_image "$SIGNAL_IMG"
+build_image() {
+  local tag="$1" dir="$2" label="$3" out
+  if out="$("${DOCKER[@]}" build -t "$tag" "$dir" 2>&1)"; then return 0; fi
+  [ "${SETUP_DEBUG:-}" = 1 ] && printf '%s\n' "$out" | tail -n 20 >&2
+  if printf '%s' "$out" | grep -qiE 'tls handshake|i/o timeout|temporary failure|could not resolve|no such host|network is unreachable|connection refused|failed to fetch anonymous token'; then
+    echo "Erreur : construction de $label impossible, téléchargement interrompu" >&2
+  else
+    echo "Erreur : construction de $label impossible" >&2
+  fi
+  return 1
+}
+
 build_whatsapp() {
   "${DOCKER[@]}" image inspect "$WHATSAPP_IMG" >/dev/null 2>&1 && return 0
   say "Construction de mautrix-whatsapp"
-  quiet "${DOCKER[@]}" build -t "$WHATSAPP_IMG" whatsapp-build || die "construction de mautrix-whatsapp impossible"
+  build_image "$WHATSAPP_IMG" whatsapp-build mautrix-whatsapp || exit 1
 }
 if [ "${EXT[mautrix-whatsapp]}" = 0 ]; then
   if [ -z "$(env_get WHATSAPP_IMAGE)" ]; then build_whatsapp; else pull_image "$WHATSAPP_IMG"; fi

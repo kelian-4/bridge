@@ -12,7 +12,7 @@ setup_status() {
   fi
   if ! "${DOCKER[@]}" image inspect "$STATUS_CLI_IMAGE" >/dev/null 2>&1; then
     say "Construction de signal-cli"
-    quiet "${DOCKER[@]}" build -t "$STATUS_CLI_IMAGE" signal-cli || { say "construction de signal-cli impossible"; return 1; }
+    build_image "$STATUS_CLI_IMAGE" signal-cli signal-cli || return 1
   fi
   quiet "${DOCKER[@]}" compose --profile local-status up -d signal-cli || { say "signal-cli impossible"; return 1; }
 
