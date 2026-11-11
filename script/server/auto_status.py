@@ -22,6 +22,8 @@ POLL_SECONDS = int(os.environ.get("STATUS_POLL_SECONDS", "10"))
 CREATE_DELAY = int(os.environ.get("STATUS_CREATE_DELAY", "30"))
 WAIT_SECONDS = int(os.environ.get("STATUS_WAIT_SECONDS", "180"))
 START_CHAT_TIMEOUT = int(os.environ.get("STATUS_START_CHAT_TIMEOUT", "120"))
+SYNC_WAIT = int(os.environ.get("STATUS_SYNC_WAIT", "90"))
+SYNC_COOLDOWN = int(os.environ.get("STATUS_SYNC_COOLDOWN", "600"))
 MAX_ATTEMPTS = int(os.environ.get("STATUS_MAX_ATTEMPTS", "3"))
 SKIP_LIDS = {value.strip() for value in os.environ.get("STATUS_SKIP_LIDS", "").split(",") if value.strip()}
 HISTORY_LIMIT = 50
@@ -160,6 +162,24 @@ def signal_account() -> str:
     return _account[0]
 
 
+_last_sync: list[float] = []
+
+
+def known_groups(account: str) -> set[str]:
+    return {item["id"] for item in (rpc("listGroups", {"account": account}) or []) if item.get("id")}
+
+
+def ensure_known(account: str, group: str) -> None:
+    if group in known_groups(account):
+        return
+    if not _last_sync or time.monotonic() - _last_sync[0] >= SYNC_COOLDOWN:
+        log.info("Synchronisation des groupes demandée")
+        rpc("sendSyncRequest", {"account": account})
+        _last_sync[:] = [time.monotonic()]
+    if wait_until(lambda: group in known_groups(account), seconds=SYNC_WAIT) is None:
+        raise StoryError("groupe inconnu de signal-cli après synchronisation")
+
+
 def fetch_media(client, content: dict) -> Path:
     match = re.match(r"mxc://([^/]+)/(.+)$", content.get("url", ""))
     if not match:
@@ -224,9 +244,11 @@ def handle(client, event: dict, rooms: dict[str, tuple[str, str | None]]) -> dic
         raise StoryError("groupe Signal non créé")
     rooms[digits] = (room_id, group)
 
+    account = signal_account()
+    ensure_known(account, group)
     media = fetch_media(client, event.get("content") or {})
     try:
-        rpc("sendStory", {"account": signal_account(), "attachment": str(media), "groupId": group})
+        rpc("sendStory", {"account": account, "attachment": str(media), "groupId": group})
     finally:
         media.unlink(missing_ok=True)
     log.info("Story publiée")
