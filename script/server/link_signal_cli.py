@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 
 
-def rpc(url, method, params=None, timeout=60):
+def rpc(url, method, params=None, timeout=60, timeout_message="signal-cli injoignable"):
     payload = {"jsonrpc": "2.0", "method": method, "id": 1}
     if params:
         payload["params"] = params
@@ -19,7 +19,10 @@ def rpc(url, method, params=None, timeout=60):
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             body = json.loads(response.read())
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+    except TimeoutError:
+        print(timeout_message, file=sys.stderr)
+        sys.exit(2)
+    except (urllib.error.URLError, OSError, ValueError):
         print("signal-cli injoignable", file=sys.stderr)
         sys.exit(2)
     if "error" in body:
@@ -51,7 +54,13 @@ def main():
         if not args.uri:
             print("adresse de liaison manquante", file=sys.stderr)
             sys.exit(1)
-        rpc(args.url, "finishLink", {"deviceLinkUri": args.uri, "deviceName": args.name}, timeout=args.timeout)
+        rpc(
+            args.url,
+            "finishLink",
+            {"deviceLinkUri": args.uri, "deviceName": args.name},
+            timeout=args.timeout,
+            timeout_message="Liaison expirée",
+        )
         numbers = accounts(args.url)
         if not numbers:
             print("compte non lié", file=sys.stderr)
@@ -60,4 +69,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("Liaison annulée", file=sys.stderr)
+        sys.exit(130)

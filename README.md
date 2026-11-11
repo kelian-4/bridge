@@ -200,6 +200,6 @@ Le module ne s'applique qu'au Synapse du dépôt. Un Synapse installé ailleurs 
 
 Un statut reçu dans le salon des statuts est republié comme story dans le groupe Signal du contact. La discussion et le groupe sont créés s'ils manquent, avec une pause entre deux créations.
 
-`./Docker/setup.sh` construit signal-cli, affiche un code à scanner avec le compte Signal du pont, puis démarre `auto-status`. Sans terminal, relancer le script plus tard. `SETUP_SKIP_STATUS=1` désactive cette étape.
+`./Docker/setup.sh` construit signal-cli, affiche un code à scanner avec le compte Signal du relais, puis démarre `auto-status`. Sans terminal, relancer le script plus tard. `SETUP_SKIP_STATUS=1` désactive cette étape.
 
 Variables optionnelles : `STATUS_SKIP_LIDS` (identifiants exclus, séparés par des virgules), `STATUS_CREATE_DELAY` (secondes entre deux créations).

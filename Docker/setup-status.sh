@@ -30,7 +30,7 @@ setup_status() {
     fi
     local uri
     uri="$(py ../script/server/link_signal_cli.py start --url "$STATUS_CLI_URL")" || { say "liaison de signal-cli impossible"; return 1; }
-    say "Scanne ce code avec le compte Signal du pont"
+    say "Scanne ce code avec le compte Signal du relais"
     "${DOCKER[@]}" exec signal-cli qrencode -t ANSIUTF8 "$uri" || say "$uri"
     number="$(py ../script/server/link_signal_cli.py finish "$uri" --url "$STATUS_CLI_URL")" || { say "signal-cli non lié"; return 1; }
   fi
