@@ -1,4 +1,4 @@
-STATUS_CLI_IMAGE="bridge/signal-cli:0.14.6"
+STATUS_CLI_IMAGE="bridge/signal-cli:0.14.10"
 STATUS_CLI_URL="${STATUS_CLI_URL:-http://127.0.0.1:18080}"
 
 setup_status() {

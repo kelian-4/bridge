@@ -166,7 +166,7 @@ services:
 
   signal-cli:
     build: ./signal-cli
-    image: bridge/signal-cli:0.14.6
+    image: bridge/signal-cli:0.14.10
     profiles: ["local-status"]
     container_name: signal-cli
     restart: unless-stopped
