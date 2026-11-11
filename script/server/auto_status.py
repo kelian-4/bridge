@@ -173,11 +173,11 @@ def ensure_known(account: str, group: str) -> None:
     if group in known_groups(account):
         return
     if not _last_sync or time.monotonic() - _last_sync[0] >= SYNC_COOLDOWN:
-        log.info("Synchronisation des groupes demandée")
+        log.info("Synchronisation des groupes demandée, %d groupes connus", len(known_groups(account)))
         rpc("sendSyncRequest", {"account": account})
         _last_sync[:] = [time.monotonic()]
     if wait_until(lambda: group in known_groups(account), seconds=SYNC_WAIT) is None:
-        raise StoryError("groupe inconnu de signal-cli après synchronisation")
+        raise StoryError(f"groupe inconnu de signal-cli après synchronisation, {len(known_groups(account))} groupes connus")
 
 
 def fetch_media(client, content: dict) -> Path:

@@ -37,10 +37,12 @@ def accounts(url):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["status", "start", "finish"])
+    parser.add_argument("action", choices=["status", "start", "finish", "groups"])
     parser.add_argument("uri", nargs="?", default="")
     parser.add_argument("--url", default=os.environ.get("SIGNAL_CLI_URL", "http://127.0.0.1:18080"))
     parser.add_argument("--name", default="bridge-statuts")
+    parser.add_argument("--account", default=os.environ.get("SIGNAL_CLI_ACCOUNT", ""))
+    parser.add_argument("--group", default="")
     parser.add_argument("--timeout", type=int, default=300)
     args = parser.parse_args()
 
@@ -48,6 +50,12 @@ def main():
         numbers = accounts(args.url)
         if numbers:
             print(numbers[0])
+    elif args.action == "groups":
+        account = args.account or (accounts(args.url) or [""])[0]
+        ids = [item.get("id") for item in (rpc(args.url, "listGroups", {"account": account}, timeout=180) or [])]
+        print(f"{len(ids)} groupes connus")
+        if args.group:
+            print("groupe présent" if args.group in ids else "groupe absent")
     elif args.action == "start":
         print((rpc(args.url, "startLink") or {})["deviceLinkUri"])
     else:
