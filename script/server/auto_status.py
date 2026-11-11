@@ -21,6 +21,7 @@ STATE_DIR = Path(os.environ.get("STATUS_STATE_DIR", "/state"))
 POLL_SECONDS = int(os.environ.get("STATUS_POLL_SECONDS", "10"))
 CREATE_DELAY = int(os.environ.get("STATUS_CREATE_DELAY", "30"))
 WAIT_SECONDS = int(os.environ.get("STATUS_WAIT_SECONDS", "180"))
+START_CHAT_TIMEOUT = int(os.environ.get("STATUS_START_CHAT_TIMEOUT", "120"))
 MAX_ATTEMPTS = int(os.environ.get("STATUS_MAX_ATTEMPTS", "3"))
 SKIP_LIDS = {value.strip() for value in os.environ.get("STATUS_SKIP_LIDS", "").split(",") if value.strip()}
 HISTORY_LIMIT = 50
@@ -88,17 +89,35 @@ def scan(client) -> tuple[str | None, dict[str, tuple[str, str | None]]]:
     return status_room, by_lid
 
 
+def bot_activity(client, room_id: str) -> int:
+    resp = client._request("GET", client._url(f"/_matrix/client/v3/rooms/{quote(room_id)}/messages?dir=b&limit=20"))
+    if resp.status_code != 200:
+        return 0
+    stamps = [
+        event.get("origin_server_ts", 0)
+        for event in resp.json().get("chunk", [])
+        if event.get("type") == "m.room.message" and event.get("sender") == ab.WHATSAPP_BOT_MXID
+    ]
+    return max(stamps, default=0)
+
+
 def management_room(client) -> str:
     resp = client._request("GET", client._url("/_matrix/client/v3/joined_rooms"))
     resp.raise_for_status()
     wanted = {ab.USER_ID, ab.WHATSAPP_BOT_MXID}
+    candidates = []
     for room_id in resp.json()["joined_rooms"]:
         try:
             if set(client.get_room_members(room_id)) == wanted:
-                return room_id
+                candidates.append(room_id)
         except requests.RequestException:
             continue
-    raise StoryError("discussion avec le bot WhatsApp introuvable")
+    if not candidates:
+        raise StoryError("discussion avec le bot WhatsApp introuvable")
+    if len(candidates) > 1:
+        log.info("%d discussions avec le bot WhatsApp, la plus récemment active est utilisée", len(candidates))
+        candidates.sort(key=lambda room_id: bot_activity(client, room_id), reverse=True)
+    return candidates[0]
 
 
 def wait_until(check, seconds: int = WAIT_SECONDS, step: int = 5):
@@ -166,7 +185,9 @@ def fetch_media(client, content: dict) -> Path:
 def start_chat(client, digits: str) -> None:
     room = management_room(client)
     token = client.sync(since=None, timeout_ms=0)["next_batch"]
-    ab.run_bridge_command(client, room, f"start-chat lid-{digits}", ab.WHATSAPP_BOT_MXID, token)
+    log.info("  -> start-chat")
+    client.send_message(room, f"start-chat lid-{digits}")
+    ab.wait_for_bot_reply(client, room, ab.WHATSAPP_BOT_MXID, token, timeout=START_CHAT_TIMEOUT)
 
 
 def ensure_signal(client, room_id: str) -> None:
@@ -243,9 +264,23 @@ def is_story(event: dict) -> bool:
     return content.get("msgtype") in MEDIA_TYPES and bool(LID_RE.match(event.get("sender", "")))
 
 
+def replay(client, count: int) -> int:
+    status_room = scan(client)[0]
+    if status_room is None:
+        print("Salon des statuts introuvable", file=sys.stderr)
+        return 1
+    ids = [event["event_id"] for event in history(client, status_room) if is_story(event)][-count:]
+    done = [event_id for event_id in (load_done() or []) if event_id not in ids]
+    save_done(done)
+    print(f"{len(ids)} statut(s) à republier")
+    return 0
+
+
 def main() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s [%(levelname)s] %(message)s", stream=sys.stdout)
     client = ab.MatrixClient(ab.HOMESERVER_URL, ab.ACCESS_TOKEN, ab.USER_ID)
+    if len(sys.argv) == 3 and sys.argv[1] == "--replay":
+        sys.exit(replay(client, int(sys.argv[2])))
     try:
         client.disable_own_ratelimit()
     except requests.RequestException:
@@ -256,12 +291,12 @@ def main() -> None:
     done = done or []
     attempts: dict[str, int] = {}
     status_room = None
-    last_scan = 0.0
+    last_scan = None
     log.info("Démarrage")
 
     while True:
         try:
-            if status_room is None and time.monotonic() - last_scan >= STATUS_RESCAN_SECONDS:
+            if status_room is None and (last_scan is None or time.monotonic() - last_scan >= STATUS_RESCAN_SECONDS):
                 status_room = scan(client)[0]
                 last_scan = time.monotonic()
             if status_room is not None:
