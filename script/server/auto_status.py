@@ -23,7 +23,7 @@ CREATE_DELAY = int(os.environ.get("STATUS_CREATE_DELAY", "30"))
 WAIT_SECONDS = int(os.environ.get("STATUS_WAIT_SECONDS", "180"))
 START_CHAT_TIMEOUT = int(os.environ.get("STATUS_START_CHAT_TIMEOUT", "120"))
 SYNC_WAIT = int(os.environ.get("STATUS_SYNC_WAIT", "90"))
-SYNC_COOLDOWN = int(os.environ.get("STATUS_SYNC_COOLDOWN", "600"))
+SYNC_COOLDOWN = int(os.environ.get("STATUS_SYNC_COOLDOWN", "90"))
 MAX_ATTEMPTS = int(os.environ.get("STATUS_MAX_ATTEMPTS", "3"))
 SKIP_LIDS = {value.strip() for value in os.environ.get("STATUS_SKIP_LIDS", "").split(",") if value.strip()}
 HISTORY_LIMIT = 50
@@ -170,7 +170,12 @@ def known_groups(account: str) -> set[str]:
 
 
 def ensure_known(account: str, group: str) -> None:
-    if group in known_groups(account):
+    started = time.monotonic()
+    known = known_groups(account)
+    elapsed = int(time.monotonic() - started)
+    if elapsed >= 10:
+        log.info("Liste des groupes obtenue en %d s", elapsed)
+    if group in known:
         return
     if not _last_sync or time.monotonic() - _last_sync[0] >= SYNC_COOLDOWN:
         log.info("Synchronisation des groupes demandée, %d groupes connus", len(known_groups(account)))
