@@ -315,26 +315,36 @@ def is_story(event: dict) -> bool:
 
 def report(client) -> int:
     account = signal_account()
-    known = known_groups(account)
+    listed = rpc("listGroups", {"account": account}) or []
+    known = {item["id"] for item in listed if item.get("id")}
+    cli_names = {item.get("name") for item in listed if item.get("name")}
     resp = client._request("GET", client._url("/_matrix/client/v3/joined_rooms"))
     resp.raise_for_status()
     now = time.time() * 1000
     total = 0
+    same_name = 0
     ages = {"connus": [], "inconnus": []}
     for room_id in resp.json()["joined_rooms"]:
         try:
             state = room_state(client, room_id)
         except requests.RequestException:
             continue
-        group = read_state(state)[1].get("signal")
+        room_name, channels = read_state(state)
+        group = channels.get("signal")
         if not group:
             continue
         total += 1
+        if group not in known and room_name in cli_names:
+            same_name += 1
         created = next((e.get("origin_server_ts", 0) for e in state if e.get("type") == "m.room.create"), 0)
         ages["connus" if group in known else "inconnus"].append(int((now - created) / 86400000) if created else -1)
     print(f"{total} groupes Signal du pont, {len(ages['connus'])} connus de signal-cli, {len(ages['inconnus'])} inconnus")
     for label in ("connus", "inconnus"):
         print(f"âge en jours des {label} : {sorted(ages[label])}")
+    print(f"{same_name} groupes inconnus portent le même nom qu'un groupe de signal-cli")
+    lengths = sorted({len(item["id"]) for item in listed if item.get("id")})
+    urlsafe = any(("-" in item["id"] or "_" in item["id"]) for item in listed if item.get("id"))
+    print(f"identifiants de signal-cli : longueurs {lengths}, alphabet URL-sûr : {'oui' if urlsafe else 'non'}")
     return 0
 
 
