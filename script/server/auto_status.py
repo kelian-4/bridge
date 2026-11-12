@@ -30,6 +30,8 @@ HISTORY_LIMIT = 50
 DONE_LIMIT = 2000
 MEDIA_TYPES = {"m.image", "m.video"}
 LID_RE = re.compile(r"^@whatsapp_lid-(\d+):")
+ROOM_LINK = re.compile(r"matrix\.to/#/(![^\s)/?]+)")
+REFUSAL_WORDS = ("failed", "error", "invalid", "unknown", "not found")
 STATUS_RESCAN_SECONDS = 60
 
 log = logging.getLogger("auto_status")
@@ -207,12 +209,31 @@ def fetch_media(client, content: dict) -> Path:
     return target
 
 
-def start_chat(client, digits: str) -> None:
+def wait_reply(client, room_id: str, since: str, seconds: int) -> str:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        remaining = int((deadline - time.monotonic()) * 1000)
+        data = client.sync(since=since, timeout_ms=max(1000, min(remaining, 10000)))
+        since = data["next_batch"]
+        events = ((data.get("rooms") or {}).get("join") or {}).get(room_id, {}).get("timeline", {}).get("events", [])
+        for event in events:
+            if event.get("sender") != ab.WHATSAPP_BOT_MXID or event.get("type") != "m.room.message":
+                continue
+            body = (event.get("content") or {}).get("body", "")
+            if ROOM_LINK.search(body):
+                return body
+            if any(word in body.lower() for word in REFUSAL_WORDS):
+                raise StoryError("start-chat refusé")
+    raise StoryError("pas de réponse du bot WhatsApp")
+
+
+def start_chat(client, digits: str) -> tuple[str, bool]:
     room = management_room(client)
     token = client.sync(since=None, timeout_ms=0)["next_batch"]
     log.info("  -> start-chat")
     client.send_message(room, f"start-chat lid-{digits}")
-    ab.wait_for_bot_reply(client, room, ab.WHATSAPP_BOT_MXID, token, timeout=START_CHAT_TIMEOUT)
+    body = wait_reply(client, room, token, START_CHAT_TIMEOUT)
+    return ROOM_LINK.search(body)[1], body.lower().startswith("created")
 
 
 def ensure_signal(client, room_id: str) -> None:
@@ -229,12 +250,13 @@ def handle(client, event: dict, rooms: dict[str, tuple[str, str | None]]) -> dic
     created = False
     entry = rooms.get(digits)
     if entry is None:
-        log.info("Création de la discussion")
-        start_chat(client, digits)
-        created = True
-        entry = wait_until(lambda: scan(client)[1].get(digits))
-        if entry is None:
-            raise StoryError("discussion non créée")
+        log.info("Recherche de la discussion")
+        found_room, created = start_chat(client, digits)
+        try:
+            client.join_room(found_room)
+            entry = (found_room, signal_group(client, found_room))
+        except requests.RequestException:
+            raise StoryError("salon de la discussion inaccessible")
         rooms[digits] = entry
 
     room_id, group = entry
@@ -291,6 +313,31 @@ def is_story(event: dict) -> bool:
     return content.get("msgtype") in MEDIA_TYPES and bool(LID_RE.match(event.get("sender", "")))
 
 
+def report(client) -> int:
+    account = signal_account()
+    known = known_groups(account)
+    resp = client._request("GET", client._url("/_matrix/client/v3/joined_rooms"))
+    resp.raise_for_status()
+    now = time.time() * 1000
+    total = 0
+    ages = {"connus": [], "inconnus": []}
+    for room_id in resp.json()["joined_rooms"]:
+        try:
+            state = room_state(client, room_id)
+        except requests.RequestException:
+            continue
+        group = read_state(state)[1].get("signal")
+        if not group:
+            continue
+        total += 1
+        created = next((e.get("origin_server_ts", 0) for e in state if e.get("type") == "m.room.create"), 0)
+        ages["connus" if group in known else "inconnus"].append(int((now - created) / 86400000) if created else -1)
+    print(f"{total} groupes Signal du pont, {len(ages['connus'])} connus de signal-cli, {len(ages['inconnus'])} inconnus")
+    for label in ("connus", "inconnus"):
+        print(f"âge en jours des {label} : {sorted(ages[label])}")
+    return 0
+
+
 def replay(client, count: int) -> int:
     status_room = scan(client)[0]
     if status_room is None:
@@ -306,6 +353,8 @@ def replay(client, count: int) -> int:
 def main() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s [%(levelname)s] %(message)s", stream=sys.stdout)
     client = ab.MatrixClient(ab.HOMESERVER_URL, ab.ACCESS_TOKEN, ab.USER_ID)
+    if len(sys.argv) == 2 and sys.argv[1] == "--report":
+        sys.exit(report(client))
     if len(sys.argv) == 3 and sys.argv[1] == "--replay":
         sys.exit(replay(client, int(sys.argv[2])))
     try:
