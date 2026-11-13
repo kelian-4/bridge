@@ -42,7 +42,7 @@ def accounts(url):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["status", "accounts", "start", "finish", "groups"])
+    parser.add_argument("action", choices=["status", "accounts", "start", "finish", "groups", "sync"])
     parser.add_argument("uri", nargs="?", default="")
     parser.add_argument("--url", default=os.environ.get("SIGNAL_CLI_URL", "http://127.0.0.1:18080"))
     parser.add_argument("--name", default="bridge-statuts")
@@ -58,6 +58,10 @@ def main():
         numbers = accounts(args.url)
         if numbers:
             print(numbers[0])
+    elif args.action == "sync":
+        account = args.account or (accounts(args.url) or [""])[0]
+        rpc(args.url, "sendSyncRequest", {"account": account}, timeout=120)
+        print("Synchronisation demandée")
     elif args.action == "groups":
         account = args.account or (accounts(args.url) or [""])[0]
         ids = [item.get("id") for item in (rpc(args.url, "listGroups", {"account": account}, timeout=180) or [])]
