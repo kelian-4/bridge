@@ -170,6 +170,23 @@ def show(client, content):
         print(body)
 
 
+UNSET_IDS = (None, "", "CHANGE_ME", "00000000-0000-0000-0000-000000000000")
+
+
+def record_signal_login(env_file, login_id, relay):
+    if not relay:
+        write_env_value(env_file, "SIGNAL_MAIN_LOGIN_ID", login_id)
+        return "principal"
+    main = read_env_value(env_file, "SIGNAL_MAIN_LOGIN_ID")
+    if main in UNSET_IDS and read_env_value(env_file, "SIGNAL_RELAY_CONNECTED") != "1":
+        main = read_env_value(env_file, "SIGNAL_RELAY_LOGIN_ID")
+    if main not in UNSET_IDS and main == login_id:
+        return "identique"
+    write_env_value(env_file, "SIGNAL_RELAY_LOGIN_ID", login_id)
+    write_env_value(env_file, "SIGNAL_RELAY_CONNECTED", "1")
+    return "relais"
+
+
 def main():
     ap = argparse.ArgumentParser(description="Connecte ton compte à un bridge (WhatsApp, Signal, Telegram) depuis le terminal.")
     ap.add_argument("bridge", help="whatsapp, signal, telegram, ou l'identifiant complet d'un bot (@bot:domaine)")
@@ -181,6 +198,7 @@ def main():
     ap.add_argument("--search", default=None, help="après la connexion, fait connaître cet utilisateur Telegram au compte (ex. @mon_bot)")
     ap.add_argument("--timeout", type=int, default=600, help="durée maximale en secondes (défaut : 600)")
     ap.add_argument("--debug", action="store_true", help="affiche chaque évènement reçu (diagnostic)")
+    ap.add_argument("--relay", action="store_true", help="connecte le second compte Signal, celui du relais")
     args = ap.parse_args()
 
     if not args.token or args.token == "CHANGE_ME":
@@ -283,7 +301,7 @@ def main():
     if result[0] == "echec":
         return 1
     print("Connexion réussie")
-    if kind in DEFAULT_BOTS:
+    if kind in DEFAULT_BOTS and not (kind == "signal" and args.relay):
         write_env_value(args.env_file, kind.upper() + "_CONNECTED", "1")
     if kind == "telegram" and args.search:
         reply = search_remote(client, room, bot, since, args.search)
@@ -296,13 +314,11 @@ def main():
             print(f"{args.search} connu du compte Telegram")
     found = UUID_RE.search(result[1])
     if kind == "signal" and found:
-        current = read_env_value(args.env_file, "SIGNAL_RELAY_LOGIN_ID")
-        login_id = found.group(0)
-        if current in (None, "", "CHANGE_ME", "00000000-0000-0000-0000-000000000000"):
-            write_env_value(args.env_file, "SIGNAL_RELAY_LOGIN_ID", login_id)
-            print("SIGNAL_RELAY_LOGIN_ID enregistré")
-        elif current != login_id:
-            print(f"SIGNAL_RELAY_LOGIN_ID différent : {login_id}")
+        outcome = record_signal_login(args.env_file, found.group(0), args.relay)
+        if outcome == "identique":
+            print("Le compte relais doit être différent du compte principal")
+            return 1
+        print("Compte relais enregistré" if args.relay else "Compte principal enregistré")
     return 0
 
 

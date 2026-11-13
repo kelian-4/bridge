@@ -54,7 +54,7 @@ Variables d'environnement optionnelles :
 | `ADMIN_MXID` | compte administrateur, par ex. `@toi:local.bridge` |
 | `MATRIX_HOMESERVER_URL` | URL de Synapse pour les scripts |
 | `MATRIX_ACCESS_TOKEN`, `INVITER_ACCESS_TOKEN` | tokens utilisés par les scripts |
-| `SIGNAL_RELAY_LOGIN_ID` | identifiant du compte Signal dédié au relais |
+| `SIGNAL_RELAY_LOGIN_ID` | identifiant du second compte Signal, dédié au relais, connecté par `setup.sh` après le compte principal |
 | `WHATSAPP_BOT_MXID`, `SIGNAL_BOT_MXID`, `TELEGRAM_BOT_MXID` | MXID des bots de gestion |
 | `BOT_RESPONSE_TIMEOUT`, `ROOM_PROCESSING_DELAY`, `CONFIRM_DELAY` | délais de l'auto-bridge |
 | `PG_DSN` | connexion Postgres pour les scripts qui lisent la base |
@@ -115,7 +115,9 @@ Les scripts de maintenance (`backfill_signal`, `mute_relay_everywhere`, `rejoin_
 5. lance `!signal set-relay <SIGNAL_RELAY_LOGIN_ID>`.
 
 Les groupes sont ainsi créés par un compte Signal lie et non par le compte personnel.
-Le service tourne dans le conteneur `auto-bridge-signal` et démarre une fois `SIGNAL_RELAY_LOGIN_ID` renseigné (obtenu après la connexion de Signal). Son état de synchronisation est conservé dans le volume `auto_bridge_state`.
+Sur une installation faite avant l'ajout du second compte, `setup.sh` le demande au prochain lancement et remet le relais à zéro. Les salons existants se rattachent au nouveau compte avec `docker exec auto-bridge-signal python backfill_signal.py --execute`.
+
+Le service tourne dans le conteneur `auto-bridge-signal` et démarre une fois `SIGNAL_RELAY_LOGIN_ID` renseigné, c'est-à-dire après la connexion du second compte Signal. Le compte principal crée les groupes, le compte relais y envoie les messages de tes contacts : ils arrivent ainsi d'un autre numéro que le tien. Son état de synchronisation est conservé dans le volume `auto_bridge_state`.
 
 ```bash
 docker compose -f Docker/docker-compose.yml logs -f auto-bridge-signal

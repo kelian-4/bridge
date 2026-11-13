@@ -62,6 +62,7 @@ def main():
         if not args.uri:
             print("adresse de liaison manquante", file=sys.stderr)
             sys.exit(1)
+        before = set(accounts(args.url))
         rpc(
             args.url,
             "finishLink",
@@ -70,10 +71,11 @@ def main():
             timeout_message="Liaison expirée",
         )
         numbers = accounts(args.url)
+        added = [number for number in numbers if number not in before]
         if not numbers:
             print("compte non lié", file=sys.stderr)
             sys.exit(1)
-        print(numbers[0])
+        print((added or numbers)[0])
 
 
 if __name__ == "__main__":

@@ -674,9 +674,10 @@ connect_bridge() {
   shift
   upper="$(printf '%s' "$kind" | tr a-z A-Z)"
   label="$kind"
-  case " $* " in *" --relay "*) is_relay=1; label="$kind relais";; esac
+  case " $* " in *" --relay "*) is_relay=1; label="le compte relais $kind";; esac
   if [ "$is_relay" = 1 ]; then
-    if ! is_placeholder "$(env_get "${upper}_RELAY_LOGIN_ID")"; then say "$label déjà connecté"; return 0; fi
+    if [ "$(env_get "${upper}_RELAY_CONNECTED")" = 1 ]; then say "$label déjà connecté"; return 0; fi
+    if [ "$(env_get "${upper}_CONNECTED")" != 1 ]; then say "$label en attente du compte principal"; return 0; fi
   elif [ "$(env_get "${upper}_CONNECTED")" = 1 ]; then say "$label déjà connecté"; return 0; fi
   [ "${SETUP_SKIP_LOGIN:-}" = 1 ] && return 0
   if [ -n "${SETUP_BRIDGES:-}" ]; then
@@ -685,9 +686,25 @@ connect_bridge() {
     if [ ! -t 0 ]; then say "$label à connecter : ./with-env.sh python3 script/server/bridge_login.py $kind $*"; return 0; fi
     confirm "Connecter $label ?" || { say "$label ignoré"; return 0; }
   fi
+  if [ "$is_relay" = 1 ]; then say "Scanne le code avec le second numéro Signal, celui du relais"; fi
   MATRIX_ACCESS_TOKEN="$(env_get MATRIX_ACCESS_TOKEN)" py ../script/server/bridge_login.py "$kind" "$@" --homeserver "$HS_URL" --env-file "$ENV_FILE" || say "$label non connecté"
 }
+
+migrate_signal_relay() {
+  local relay main zero="00000000-0000-0000-0000-000000000000"
+  [ "$(env_get SIGNAL_CONNECTED)" = 1 ] && [ "$(env_get SIGNAL_RELAY_CONNECTED)" != 1 ] || return 0
+  relay="$(env_get SIGNAL_RELAY_LOGIN_ID)"
+  main="$(env_get SIGNAL_MAIN_LOGIN_ID)"
+  [[ "$relay" =~ ^[0-9a-fA-F-]{36}$ ]] && [ "$relay" != "$zero" ] || return 0
+  if [ -z "$main" ] || [ "$main" = "$zero" ]; then env_set SIGNAL_MAIN_LOGIN_ID "$relay"; fi
+  env_set SIGNAL_RELAY_LOGIN_ID "$zero"
+  say "Le compte relais Signal doit être un second compte"
+}
+
+migrate_signal_relay
+relay_was_connected="$(env_get SIGNAL_RELAY_CONNECTED)"
 connect_bridge signal
+connect_bridge signal --relay
 connect_bridge whatsapp
 if [ "$TELEGRAM_ON" = 1 ]; then
   connect_bridge telegram
@@ -703,6 +720,9 @@ if [ "${EXT[auto-bridge-signal]}" = 0 ]; then
   if [[ "$relay" =~ ^[0-9a-fA-F-]{36}$ ]] && [ "$relay" != "00000000-0000-0000-0000-000000000000" ]; then
     quiet "${DOCKER[@]}" compose up -d --force-recreate auto-bridge-signal || die "auto-bridge-signal impossible"
     say "auto-bridge-signal démarré"
+    if [ "$relay_was_connected" != 1 ] && [ "$(env_get SIGNAL_RELAY_CONNECTED)" = 1 ]; then
+      say "Salons existants : docker exec auto-bridge-signal python backfill_signal.py --execute"
+    fi
   else
     say "auto-bridge-signal en attente de la connexion signal"
   fi

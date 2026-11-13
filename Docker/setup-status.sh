@@ -6,8 +6,8 @@ setup_status() {
   [ "${EXT[auto-bridge-signal]}" = 0 ] || return 0
   local relay
   relay="$(env_get SIGNAL_RELAY_LOGIN_ID)"
-  if ! [[ "$relay" =~ ^[0-9a-fA-F-]{36}$ ]] || [ "$relay" = "00000000-0000-0000-0000-000000000000" ]; then
-    say "statuts en attente de la connexion signal"
+  if [ "$(env_get SIGNAL_RELAY_CONNECTED)" != 1 ] || ! [[ "$relay" =~ ^[0-9a-fA-F-]{36}$ ]] || [ "$relay" = "00000000-0000-0000-0000-000000000000" ]; then
+    say "statuts en attente du compte relais"
     return 0
   fi
   if ! "${DOCKER[@]}" image inspect "$STATUS_CLI_IMAGE" >/dev/null 2>&1; then
@@ -17,11 +17,13 @@ setup_status() {
   quiet "${DOCKER[@]}" compose --profile local-status up -d signal-cli || { say "signal-cli impossible"; return 1; }
 
   local number="" tries=0
-  until number="$(py ../script/server/link_signal_cli.py status --url "$STATUS_CLI_URL" 2>/dev/null)"; do
+  until py ../script/server/link_signal_cli.py status --url "$STATUS_CLI_URL" >/dev/null 2>&1; do
     tries=$((tries + 1))
     [ "$tries" -ge 30 ] && { say "signal-cli ne répond pas"; return 1; }
     sleep 2
   done
+
+  if [ "$(env_get SIGNAL_CLI_FOR_RELAY)" = "$relay" ]; then number="$(env_get SIGNAL_CLI_ACCOUNT)"; fi
 
   if [ -z "$number" ]; then
     if [ "${SETUP_SKIP_LOGIN:-}" = 1 ] || [ ! -t 0 ]; then
@@ -30,9 +32,10 @@ setup_status() {
     fi
     local uri
     uri="$(py ../script/server/link_signal_cli.py start --url "$STATUS_CLI_URL")" || { say "liaison de signal-cli impossible"; return 1; }
-    say "Scanne ce code avec le compte Signal du relais"
+    say "Scanne ce code avec le second numéro Signal, celui du relais"
     "${DOCKER[@]}" exec signal-cli qrencode -t ANSIUTF8 "$uri" || say "$uri"
     number="$(py ../script/server/link_signal_cli.py finish "$uri" --url "$STATUS_CLI_URL")" || { say "signal-cli non lié"; return 1; }
+    env_set SIGNAL_CLI_FOR_RELAY "$relay"
   fi
 
   env_set SIGNAL_CLI_ACCOUNT "$number"
