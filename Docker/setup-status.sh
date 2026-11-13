@@ -3,6 +3,7 @@ STATUS_CLI_URL="${STATUS_CLI_URL:-http://127.0.0.1:18080}"
 
 setup_status() {
   [ "${SETUP_SKIP_STATUS:-}" = 1 ] && return 0
+  [ "$(env_get STATUS_ENABLED)" = 0 ] && return 0
   [ "${EXT[auto-bridge-signal]}" = 0 ] || return 0
   local relay
   relay="$(env_get SIGNAL_RELAY_LOGIN_ID)"
@@ -30,9 +31,14 @@ setup_status() {
       say "signal-cli à lier : ./Docker/setup.sh"
       return 0
     fi
+    if ! confirm "Publier les statuts en stories ? Un second scan avec le même numéro est nécessaire"; then
+      env_set STATUS_ENABLED 0
+      say "stories ignorées, STATUS_ENABLED=1 dans .env pour les activer"
+      return 0
+    fi
     local uri
     uri="$(py ../script/server/link_signal_cli.py start --url "$STATUS_CLI_URL")" || { say "liaison de signal-cli impossible"; return 1; }
-    say "Scanne ce code avec le second numéro Signal, celui du relais"
+    say "Stories : scanne ce second code avec le même numéro Signal"
     "${DOCKER[@]}" exec signal-cli qrencode -t ANSIUTF8 "$uri" || say "$uri"
     number="$(py ../script/server/link_signal_cli.py finish "$uri" --url "$STATUS_CLI_URL")" || { say "signal-cli non lié"; return 1; }
     env_set SIGNAL_CLI_FOR_RELAY "$relay"

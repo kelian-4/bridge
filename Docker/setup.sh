@@ -686,7 +686,7 @@ connect_bridge() {
     if [ ! -t 0 ]; then say "$label à connecter : ./with-env.sh python3 script/server/bridge_login.py $kind $*"; return 0; fi
     confirm "Connecter $label ?" || { say "$label ignoré"; return 0; }
   fi
-  if [ "$is_relay" = 1 ]; then say "Scanne le code avec le second numéro Signal, celui du relais"; fi
+  if [ "$is_relay" = 1 ]; then say "Relais des messages : scanne le code avec le second numéro Signal"; fi
   MATRIX_ACCESS_TOKEN="$(env_get MATRIX_ACCESS_TOKEN)" py ../script/server/bridge_login.py "$kind" "$@" --homeserver "$HS_URL" --env-file "$ENV_FILE" || say "$label non connecté"
 }
 
