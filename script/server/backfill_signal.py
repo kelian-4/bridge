@@ -342,7 +342,7 @@ def main() -> None:
         log.info("  - [%s] %s (%s)", case, room_name, room_id)
 
     for i, (room_id, room_name, case) in enumerate(to_fix):
-        if i > 0:
+        if i > 0 and args.execute:
             time.sleep(ROOM_PROCESSING_DELAY)
 
         if not args.execute:
