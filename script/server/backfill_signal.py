@@ -264,6 +264,8 @@ def main() -> None:
         "--execute", action="store_true",
         help="Exécute réellement les actions. Sans ce flag, mode dry-run.",
     )
+    parser.add_argument("--limit", type=int, default=0, help="Traite au plus N salons.")
+    parser.add_argument("--cas", choices=["A", "B"], help="Ne traite que les salons du cas A ou du cas B.")
     args = parser.parse_args()
 
     if not args.execute:
@@ -299,6 +301,10 @@ def main() -> None:
             to_fix.append((room_id, room_name, "B"))
         # sinon: déjà complet, on ignore
 
+    if args.cas:
+        to_fix = [item for item in to_fix if item[2] == args.cas]
+    if args.limit > 0:
+        to_fix = to_fix[: args.limit]
     log.info("%d salons à corriger.", len(to_fix))
     for room_id, room_name, case in to_fix:
         log.info("  - [%s] %s (%s)", case, room_name, room_id)
