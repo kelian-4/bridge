@@ -22,7 +22,9 @@ POLL_SECONDS = int(os.environ.get("STATUS_POLL_SECONDS", "10"))
 CREATE_DELAY = int(os.environ.get("STATUS_CREATE_DELAY", "30"))
 WAIT_SECONDS = int(os.environ.get("STATUS_WAIT_SECONDS", "180"))
 START_CHAT_TIMEOUT = int(os.environ.get("STATUS_START_CHAT_TIMEOUT", "120"))
-SYNC_WAIT = int(os.environ.get("STATUS_SYNC_WAIT", "90"))
+SYNC_WAIT = int(os.environ.get("STATUS_SYNC_WAIT", "20"))
+UNKNOWN_GROUP_WAIT = int(os.environ.get("STATUS_UNKNOWN_GROUP_WAIT", "21600"))
+UNKNOWN_GROUP_RETRY = int(os.environ.get("STATUS_UNKNOWN_GROUP_RETRY", "300"))
 SYNC_COOLDOWN = int(os.environ.get("STATUS_SYNC_COOLDOWN", "90"))
 MAX_ATTEMPTS = int(os.environ.get("STATUS_MAX_ATTEMPTS", "3"))
 SKIP_LIDS = {value.strip() for value in os.environ.get("STATUS_SKIP_LIDS", "").split(",") if value.strip()}
@@ -38,6 +40,10 @@ log = logging.getLogger("auto_status")
 
 
 class StoryError(Exception):
+    pass
+
+
+class UnknownGroup(StoryError):
     pass
 
 
@@ -184,7 +190,7 @@ def ensure_known(account: str, group: str) -> None:
         rpc("sendSyncRequest", {"account": account})
         _last_sync[:] = [time.monotonic()]
     if wait_until(lambda: group in known_groups(account), seconds=SYNC_WAIT) is None:
-        raise StoryError(f"groupe inconnu de signal-cli après synchronisation, {len(known_groups(account))} groupes connus")
+        raise UnknownGroup(f"groupe inconnu de signal-cli après synchronisation, {len(known_groups(account))} groupes connus")
 
 
 def fetch_media(client, content: dict) -> Path:
@@ -376,6 +382,8 @@ def main() -> None:
     first_run = done is None
     done = done or []
     attempts: dict[str, int] = {}
+    unknown_since: dict[str, float] = {}
+    retry_at: dict[str, float] = {}
     status_room = None
     last_scan = None
     log.info("Démarrage")
@@ -397,9 +405,20 @@ def main() -> None:
                     rooms = scan(client)[1]
                     for event in pending:
                         event_id = event["event_id"]
+                        if retry_at.get(event_id, 0) > time.monotonic():
+                            continue
                         try:
                             rooms = handle(client, event, rooms)
                             done.append(event_id)
+                        except UnknownGroup as error:
+                            first = unknown_since.setdefault(event_id, time.monotonic())
+                            if time.monotonic() - first > UNKNOWN_GROUP_WAIT:
+                                log.error("Statut abandonné : %s", error)
+                                done.append(event_id)
+                            else:
+                                if event_id not in retry_at:
+                                    log.warning("%s, nouvel essai toutes les %d s", error, UNKNOWN_GROUP_RETRY)
+                                retry_at[event_id] = time.monotonic() + UNKNOWN_GROUP_RETRY
                         except (StoryError, ab.BridgeCommandError, ab.BridgeCommandTimeout, requests.RequestException) as error:
                             attempts[event_id] = attempts.get(event_id, 0) + 1
                             log.error("Statut non publié : %s", error)
