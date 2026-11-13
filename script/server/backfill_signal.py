@@ -20,6 +20,7 @@ import logging
 import os
 import sys
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -210,6 +211,36 @@ def run_bridge_command(
     )
 
 
+def signal_channel(client: MatrixClient, room_id: str) -> str | None:
+    resp = client._request("GET", client._url(f"/_matrix/client/v3/rooms/{urllib.parse.quote(room_id, safe='')}/state"))
+    resp.raise_for_status()
+    for event in resp.json():
+        if event.get("type") != "m.bridge":
+            continue
+        content = event.get("content") or {}
+        if (content.get("protocol") or {}).get("id") == "signal":
+            return (content.get("channel") or {}).get("id")
+    return None
+
+
+def existing_group_setup(client: MatrixClient, room_id: str, room_name: str, sync_token: str) -> str:
+    log.info("  [Cas C] Groupe Signal existant, bot absent -> invitation sans recréation")
+
+    log.info("  Invitation de %s", SIGNAL_BOT_MXID)
+    client.invite(room_id, SIGNAL_BOT_MXID)
+
+    bot_deadline = time.monotonic() + 20
+    while time.monotonic() < bot_deadline:
+        if SIGNAL_BOT_MXID in set(client.get_room_members(room_id)):
+            break
+        time.sleep(1)
+    else:
+        raise BridgeCommandTimeout(f"{SIGNAL_BOT_MXID} n'a pas rejoint {room_id} après 20s, abandon.")
+
+    client.set_power_level(room_id, SIGNAL_BOT_MXID, 100)
+    return fix_missing_relay(client, room_id, room_name, sync_token)
+
+
 def full_signal_setup(client: MatrixClient, room_id: str, room_name: str, sync_token: str) -> str:
     """Salon sans @signalbot du tout: flow complet."""
     log.info("  [Cas A] Aucun Signal -> flow complet")
@@ -265,7 +296,7 @@ def main() -> None:
         help="Exécute réellement les actions. Sans ce flag, mode dry-run.",
     )
     parser.add_argument("--limit", type=int, default=0, help="Traite au plus N salons.")
-    parser.add_argument("--cas", choices=["A", "B"], help="Ne traite que les salons du cas A ou du cas B.")
+    parser.add_argument("--cas", choices=["A", "B", "C"], help="Ne traite que les salons du cas A, B ou C.")
     args = parser.parse_args()
 
     if not args.execute:
@@ -296,7 +327,7 @@ def main() -> None:
             continue
 
         if SIGNAL_BOT_MXID not in members:
-            to_fix.append((room_id, room_name, "A"))
+            to_fix.append((room_id, room_name, "C" if signal_channel(client, room_id) else "A"))
         elif SIGNAL_RELAY_GHOST_MXID not in members:
             to_fix.append((room_id, room_name, "B"))
         # sinon: déjà complet, on ignore
@@ -305,7 +336,8 @@ def main() -> None:
         to_fix = [item for item in to_fix if item[2] == args.cas]
     if args.limit > 0:
         to_fix = to_fix[: args.limit]
-    log.info("%d salons à corriger.", len(to_fix))
+    summary = {case: sum(1 for item in to_fix if item[2] == case) for case in "ABC"}
+    log.info("%d salons à corriger : cas A %d, cas B %d, cas C %d.", len(to_fix), summary["A"], summary["B"], summary["C"])
     for room_id, room_name, case in to_fix:
         log.info("  - [%s] %s (%s)", case, room_name, room_id)
 
@@ -321,6 +353,8 @@ def main() -> None:
         try:
             if case == "A":
                 sync_token = full_signal_setup(client, room_id, room_name, sync_token)
+            elif case == "C":
+                sync_token = existing_group_setup(client, room_id, room_name, sync_token)
             else:
                 sync_token = fix_missing_relay(client, room_id, room_name, sync_token)
             log.info("  Terminé.")
