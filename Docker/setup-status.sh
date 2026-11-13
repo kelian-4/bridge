@@ -17,14 +17,25 @@ setup_status() {
   fi
   quiet "${DOCKER[@]}" compose --profile local-status up -d signal-cli || { say "signal-cli impossible"; return 1; }
 
-  local number="" tries=0
-  until py ../script/server/link_signal_cli.py status --url "$STATUS_CLI_URL" >/dev/null 2>&1; do
+  local number="" tries=0 listed relay_number
+  until listed="$(py ../script/server/link_signal_cli.py accounts --url "$STATUS_CLI_URL" 2>/dev/null)"; do
     tries=$((tries + 1))
     [ "$tries" -ge 30 ] && { say "signal-cli ne répond pas"; return 1; }
     sleep 2
   done
 
+  relay_number="$(env_get SIGNAL_RELAY_NUMBER)"
   if [ "$(env_get SIGNAL_CLI_FOR_RELAY)" = "$relay" ]; then number="$(env_get SIGNAL_CLI_ACCOUNT)"; fi
+  if [ -z "$number" ] && [ -n "$relay_number" ] && printf '%s\n' "$listed" | grep -qxF "$relay_number"; then number="$relay_number"; fi
+  if [ -z "$number" ] && [ -z "$relay_number" ] && [ -t 0 ] && [ "$(printf '%s\n' "$listed" | grep -c .)" = 1 ]; then
+    local only
+    only="$(printf '%s\n' "$listed" | grep .)"
+    if confirm "signal-cli est déjà lié à $only. Est-ce le second numéro, celui du relais ?"; then
+      number="$only"
+      env_set SIGNAL_RELAY_NUMBER "$only"
+    fi
+  fi
+  if [ -n "$number" ]; then env_set SIGNAL_CLI_FOR_RELAY "$relay"; fi
 
   if [ -z "$number" ]; then
     if [ "${SETUP_SKIP_LOGIN:-}" = 1 ] || [ ! -t 0 ]; then
@@ -42,6 +53,7 @@ setup_status() {
     "${DOCKER[@]}" exec signal-cli qrencode -t ANSIUTF8 "$uri" || say "$uri"
     number="$(py ../script/server/link_signal_cli.py finish "$uri" --url "$STATUS_CLI_URL")" || { say "signal-cli non lié"; return 1; }
     env_set SIGNAL_CLI_FOR_RELAY "$relay"
+    env_set SIGNAL_RELAY_NUMBER "$number"
   fi
 
   env_set SIGNAL_CLI_ACCOUNT "$number"

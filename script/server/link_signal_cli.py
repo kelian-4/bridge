@@ -2,12 +2,13 @@
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
 
 
-def rpc(url, method, params=None, timeout=60, timeout_message="signal-cli injoignable"):
+def rpc(url, method, params=None, timeout=60, timeout_message="signal-cli injoignable", exists_ok=False):
     payload = {"jsonrpc": "2.0", "method": method, "id": 1}
     if params:
         payload["params"] = params
@@ -26,7 +27,11 @@ def rpc(url, method, params=None, timeout=60, timeout_message="signal-cli injoig
         print("signal-cli injoignable", file=sys.stderr)
         sys.exit(2)
     if "error" in body:
-        print(f"signal-cli : {(body['error'] or {}).get('message', 'erreur')}", file=sys.stderr)
+        message = (body["error"] or {}).get("message", "erreur")
+        existing = re.search(r"user (\+\d+) already exists", message)
+        if exists_ok and existing:
+            return {"existing": existing.group(1)}
+        print(f"signal-cli : {message}", file=sys.stderr)
         sys.exit(1)
     return body.get("result")
 
@@ -37,7 +42,7 @@ def accounts(url):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["status", "start", "finish", "groups"])
+    parser.add_argument("action", choices=["status", "accounts", "start", "finish", "groups"])
     parser.add_argument("uri", nargs="?", default="")
     parser.add_argument("--url", default=os.environ.get("SIGNAL_CLI_URL", "http://127.0.0.1:18080"))
     parser.add_argument("--name", default="bridge-statuts")
@@ -46,7 +51,10 @@ def main():
     parser.add_argument("--timeout", type=int, default=300)
     args = parser.parse_args()
 
-    if args.action == "status":
+    if args.action == "accounts":
+        for number in accounts(args.url):
+            print(number)
+    elif args.action == "status":
         numbers = accounts(args.url)
         if numbers:
             print(numbers[0])
@@ -63,13 +71,18 @@ def main():
             print("adresse de liaison manquante", file=sys.stderr)
             sys.exit(1)
         before = set(accounts(args.url))
-        rpc(
+        outcome = rpc(
             args.url,
             "finishLink",
             {"deviceLinkUri": args.uri, "deviceName": args.name},
             timeout=args.timeout,
             timeout_message="Liaison expirée",
+            exists_ok=True,
         )
+        if isinstance(outcome, dict) and outcome.get("existing"):
+            print("signal-cli était déjà lié à ce numéro", file=sys.stderr)
+            print(outcome["existing"])
+            return
         numbers = accounts(args.url)
         added = [number for number in numbers if number not in before]
         if not numbers:

@@ -173,7 +173,7 @@ def show(client, content):
 UNSET_IDS = (None, "", "CHANGE_ME", "00000000-0000-0000-0000-000000000000")
 
 
-def record_signal_login(env_file, login_id, relay):
+def record_signal_login(env_file, login_id, relay, number=""):
     if not relay:
         write_env_value(env_file, "SIGNAL_MAIN_LOGIN_ID", login_id)
         return "principal"
@@ -184,6 +184,8 @@ def record_signal_login(env_file, login_id, relay):
         return "identique"
     write_env_value(env_file, "SIGNAL_RELAY_LOGIN_ID", login_id)
     write_env_value(env_file, "SIGNAL_RELAY_CONNECTED", "1")
+    if number:
+        write_env_value(env_file, "SIGNAL_RELAY_NUMBER", number)
     return "relais"
 
 
@@ -314,7 +316,8 @@ def main():
             print(f"{args.search} connu du compte Telegram")
     found = UUID_RE.search(result[1])
     if kind == "signal" and found:
-        outcome = record_signal_login(args.env_file, found.group(0), args.relay)
+        phone = re.search(r"\+\d{6,15}", result[1])
+        outcome = record_signal_login(args.env_file, found.group(0), args.relay, phone.group(0) if phone else "")
         if outcome == "identique":
             print("Le compte relais doit être différent du compte principal")
             return 1
