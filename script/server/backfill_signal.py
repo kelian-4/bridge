@@ -310,6 +310,42 @@ def fix_missing_relay(client: MatrixClient, room_id: str, room_name: str, sync_t
     return sync_token
 
 
+def finalise(client: MatrixClient, execute: bool, limit: int) -> None:
+    log.info("Récupération de la liste des salons...")
+    sync_token = client.sync(since=None, timeout_ms=0)["next_batch"]
+    targets: list[tuple[str, str]] = []
+    for room_id in client.get_joined_rooms():
+        try:
+            members = set(client.get_room_members(room_id))
+        except requests.RequestException as e:
+            log.warning("Impossible de lire les membres de %s: %s", room_id, e)
+            continue
+        if not {WHATSAPP_BOT_MXID, SIGNAL_BOT_MXID, SIGNAL_RELAY_GHOST_MXID} <= members:
+            continue
+        room_name = client.get_room_name(room_id) or room_id
+        if room_name == STATUS_BROADCAST_NAME or not signal_channel(client, room_id):
+            continue
+        targets.append((room_id, room_name))
+    if limit > 0:
+        targets = targets[:limit]
+    log.info("%d salons où le compte relais est entré.", len(targets))
+    for i, (room_id, room_name) in enumerate(targets):
+        if not execute:
+            log.info("[DRY-RUN] set-relay dans %s (%s)", room_name, room_id)
+            continue
+        if i > 0:
+            time.sleep(ROOM_PROCESSING_DELAY)
+        try:
+            sync_token = run_bridge_command(
+                client, room_id, f"!signal set-relay {SIGNAL_RELAY_LOGIN_ID}", SIGNAL_BOT_MXID, sync_token
+            )
+        except (BridgeCommandError, BridgeCommandTimeout) as e:
+            log.error("  Échec sur %s: %s", room_id, e)
+        except requests.RequestException as e:
+            log.error("  Erreur réseau sur %s: %s", room_id, e)
+    log.info("Terminé.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -318,12 +354,20 @@ def main() -> None:
     )
     parser.add_argument("--limit", type=int, default=0, help="Traite au plus N salons.")
     parser.add_argument("--cas", choices=["A", "B", "C", "D"], help="Ne traite que les salons du cas A, B, C ou D.")
+    parser.add_argument("--invitations", action="store_true", help="Cas B : invite le compte relais sans attendre ni modifier le relais.")
+    parser.add_argument("--finaliser", action="store_true", help="Envoie set-relay dans les salons où le compte relais est entré.")
     args = parser.parse_args()
 
     if not args.execute:
         log.info("=== MODE DRY-RUN — aucune commande ne sera envoyée. Utilise --execute pour agir. ===")
 
     client = MatrixClient(HOMESERVER_URL, ACCESS_TOKEN, USER_ID)
+
+    if args.finaliser:
+        finalise(client, args.execute, args.limit)
+        return
+    if args.invitations:
+        args.cas = "B"
 
     log.info("Récupération de la liste des salons...")
     room_ids = client.get_joined_rooms()
@@ -376,6 +420,9 @@ def main() -> None:
                 sync_token = full_signal_setup(client, room_id, room_name, sync_token)
             elif case == "C":
                 sync_token = existing_group_setup(client, room_id, room_name, sync_token)
+            elif args.invitations:
+                client.invite(room_id, SIGNAL_RELAY_GHOST_MXID)
+                log.info("  Invitation envoyée.")
             else:
                 sync_token = fix_missing_relay(client, room_id, room_name, sync_token)
             log.info("  Terminé.")
