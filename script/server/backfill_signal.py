@@ -225,6 +225,27 @@ def signal_channel(client: MatrixClient, room_id: str) -> str | None:
     return None
 
 
+RELAY_STATE_TYPE = "fr.kelian.auto_bridge_signal"
+
+
+def relay_state_url(client: MatrixClient, room_id: str) -> str:
+    return client._url(f"/_matrix/client/v3/rooms/{urllib.parse.quote(room_id, safe='')}/state/{RELAY_STATE_TYPE}/")
+
+
+def recorded_relay(client: MatrixClient, room_id: str) -> str:
+    resp = client._request("GET", relay_state_url(client, room_id))
+    if resp.status_code != 200:
+        return ""
+    return (resp.json() or {}).get("relay", "")
+
+
+def record_relay(client: MatrixClient, room_id: str, relay_id: str) -> None:
+    resp = client._request("GET", relay_state_url(client, room_id))
+    content = (resp.json() or {}) if resp.status_code == 200 else {}
+    content["relay"] = relay_id
+    client._request("PUT", relay_state_url(client, room_id), json=content).raise_for_status()
+
+
 def existing_group_setup(client: MatrixClient, room_id: str, room_name: str, sync_token: str) -> str:
     log.info("  [Cas C] Groupe Signal existant, bot absent -> invitation sans recréation")
 
@@ -307,6 +328,8 @@ def fix_missing_relay(client: MatrixClient, room_id: str, room_name: str, sync_t
     sync_token = run_bridge_command(
         client, room_id, f"!signal set-relay {relay_id}", SIGNAL_BOT_MXID, sync_token
     )
+    if relay_id == SIGNAL_RELAY_LOGIN_ID:
+        record_relay(client, room_id, relay_id)
     return sync_token
 
 
@@ -325,10 +348,12 @@ def finalise(client: MatrixClient, execute: bool, limit: int) -> None:
         room_name = client.get_room_name(room_id) or room_id
         if room_name == STATUS_BROADCAST_NAME or not signal_channel(client, room_id):
             continue
+        if recorded_relay(client, room_id) == SIGNAL_RELAY_LOGIN_ID:
+            continue
         targets.append((room_id, room_name))
     if limit > 0:
         targets = targets[:limit]
-    log.info("%d salons où le compte relais est entré.", len(targets))
+    log.info("%d salons où le compte relais est entré et pas encore basculé.", len(targets))
     for i, (room_id, room_name) in enumerate(targets):
         if not execute:
             log.info("[DRY-RUN] set-relay dans %s (%s)", room_name, room_id)
@@ -339,6 +364,7 @@ def finalise(client: MatrixClient, execute: bool, limit: int) -> None:
             sync_token = run_bridge_command(
                 client, room_id, f"!signal set-relay {SIGNAL_RELAY_LOGIN_ID}", SIGNAL_BOT_MXID, sync_token
             )
+            record_relay(client, room_id, SIGNAL_RELAY_LOGIN_ID)
         except (BridgeCommandError, BridgeCommandTimeout) as e:
             log.error("  Échec sur %s: %s", room_id, e)
         except requests.RequestException as e:
