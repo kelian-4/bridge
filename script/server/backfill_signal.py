@@ -44,6 +44,7 @@ ROOM_PROCESSING_DELAY = float(os.environ.get("ROOM_PROCESSING_DELAY", "2"))
 ERROR_KEYWORDS = ("error", "failed", "⚠", "not found", "invalid")
 CREATE_GROUP_SUCCESS_MARKER = "successfully created group"
 STATUS_BROADCAST_NAME = "WhatsApp Status Broadcast"
+RELAY_JOIN_WAIT = int(os.environ.get("BACKFILL_RELAY_JOIN_WAIT", "20"))
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -283,6 +284,18 @@ def fix_missing_relay(client: MatrixClient, room_id: str, room_name: str, sync_t
     log.info("  Invitation de %s", SIGNAL_RELAY_GHOST_MXID)
     client.invite(room_id, SIGNAL_RELAY_GHOST_MXID)
 
+    join_deadline = time.monotonic() + RELAY_JOIN_WAIT
+    joined = False
+    while time.monotonic() < join_deadline:
+        if SIGNAL_RELAY_GHOST_MXID in set(client.get_room_members(room_id)):
+            joined = True
+            break
+        time.sleep(2)
+    if joined:
+        log.info("  Le compte relais est dans le salon.")
+    else:
+        log.warning("  Le compte relais n'a pas rejoint le salon après %d s.", RELAY_JOIN_WAIT)
+
     sync_token = run_bridge_command(
         client, room_id, f"!signal set-relay {SIGNAL_RELAY_LOGIN_ID}", SIGNAL_BOT_MXID, sync_token
     )
@@ -296,7 +309,7 @@ def main() -> None:
         help="Exécute réellement les actions. Sans ce flag, mode dry-run.",
     )
     parser.add_argument("--limit", type=int, default=0, help="Traite au plus N salons.")
-    parser.add_argument("--cas", choices=["A", "B", "C"], help="Ne traite que les salons du cas A, B ou C.")
+    parser.add_argument("--cas", choices=["A", "B", "C", "D"], help="Ne traite que les salons du cas A, B, C ou D.")
     args = parser.parse_args()
 
     if not args.execute:
@@ -329,15 +342,15 @@ def main() -> None:
         if SIGNAL_BOT_MXID not in members:
             to_fix.append((room_id, room_name, "C" if signal_channel(client, room_id) else "A"))
         elif SIGNAL_RELAY_GHOST_MXID not in members:
-            to_fix.append((room_id, room_name, "B"))
+            to_fix.append((room_id, room_name, "B" if signal_channel(client, room_id) else "D"))
         # sinon: déjà complet, on ignore
 
     if args.cas:
         to_fix = [item for item in to_fix if item[2] == args.cas]
     if args.limit > 0:
         to_fix = to_fix[: args.limit]
-    summary = {case: sum(1 for item in to_fix if item[2] == case) for case in "ABC"}
-    log.info("%d salons à corriger : cas A %d, cas B %d, cas C %d.", len(to_fix), summary["A"], summary["B"], summary["C"])
+    summary = {case: sum(1 for item in to_fix if item[2] == case) for case in "ABCD"}
+    log.info("%d salons à corriger : cas A %d, cas B %d, cas C %d, cas D %d.", len(to_fix), summary["A"], summary["B"], summary["C"], summary["D"])
     for room_id, room_name, case in to_fix:
         log.info("  - [%s] %s (%s)", case, room_name, room_id)
 
@@ -351,7 +364,7 @@ def main() -> None:
 
         log.info("Traitement de %s (%s) [cas %s]", room_name, room_id, case)
         try:
-            if case == "A":
+            if case in ("A", "D"):
                 sync_token = full_signal_setup(client, room_id, room_name, sync_token)
             elif case == "C":
                 sync_token = existing_group_setup(client, room_id, room_name, sync_token)
