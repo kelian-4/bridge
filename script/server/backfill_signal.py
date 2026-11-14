@@ -45,6 +45,7 @@ ERROR_KEYWORDS = ("error", "failed", "⚠", "not found", "invalid")
 CREATE_GROUP_SUCCESS_MARKER = "successfully created group"
 STATUS_BROADCAST_NAME = "WhatsApp Status Broadcast"
 RELAY_JOIN_WAIT = int(os.environ.get("BACKFILL_RELAY_JOIN_WAIT", "20"))
+ZERO_LOGIN_ID = "00000000-0000-0000-0000-000000000000"
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -291,13 +292,20 @@ def fix_missing_relay(client: MatrixClient, room_id: str, room_name: str, sync_t
             joined = True
             break
         time.sleep(2)
+    relay_id = SIGNAL_RELAY_LOGIN_ID
     if joined:
         log.info("  Le compte relais est dans le salon.")
     else:
+        main_id = os.environ.get("SIGNAL_MAIN_LOGIN_ID", "")
         log.warning("  Le compte relais n'a pas rejoint le salon après %d s.", RELAY_JOIN_WAIT)
+        if len(main_id) != 36 or main_id == ZERO_LOGIN_ID:
+            log.warning("  Relais du salon laissé inchangé.")
+            return sync_token
+        log.warning("  Relais du salon remis sur le compte principal.")
+        relay_id = main_id
 
     sync_token = run_bridge_command(
-        client, room_id, f"!signal set-relay {SIGNAL_RELAY_LOGIN_ID}", SIGNAL_BOT_MXID, sync_token
+        client, room_id, f"!signal set-relay {relay_id}", SIGNAL_BOT_MXID, sync_token
     )
     return sync_token
 
