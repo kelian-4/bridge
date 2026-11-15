@@ -25,6 +25,7 @@ START_CHAT_TIMEOUT = int(os.environ.get("STATUS_START_CHAT_TIMEOUT", "120"))
 SYNC_WAIT = int(os.environ.get("STATUS_SYNC_WAIT", "20"))
 UNKNOWN_GROUP_WAIT = int(os.environ.get("STATUS_UNKNOWN_GROUP_WAIT", "21600"))
 UNKNOWN_GROUP_RETRY = int(os.environ.get("STATUS_UNKNOWN_GROUP_RETRY", "300"))
+SIGNAL_UNAVAILABLE_RETRY = int(os.environ.get("STATUS_SIGNAL_UNAVAILABLE_RETRY", "120"))
 SYNC_COOLDOWN = int(os.environ.get("STATUS_SYNC_COOLDOWN", "90"))
 MAX_ATTEMPTS = int(os.environ.get("STATUS_MAX_ATTEMPTS", "3"))
 SKIP_LIDS = {value.strip() for value in os.environ.get("STATUS_SKIP_LIDS", "").split(",") if value.strip()}
@@ -43,7 +44,15 @@ class StoryError(Exception):
     pass
 
 
-class UnknownGroup(StoryError):
+class RetryLater(StoryError):
+    pass
+
+
+class UnknownGroup(RetryLater):
+    pass
+
+
+class SignalUnavailable(RetryLater):
     pass
 
 
@@ -150,9 +159,12 @@ def rpc(method: str, params: dict):
         )
         body = resp.json()
     except (requests.RequestException, ValueError):
-        raise StoryError("signal-cli injoignable")
+        raise SignalUnavailable("signal-cli injoignable")
     if "error" in body:
-        raise StoryError(f"signal-cli : {(body['error'] or {}).get('message', 'erreur')}")
+        message = (body["error"] or {}).get("message", "erreur")
+        if "Specified account does not exist" in message:
+            raise SignalUnavailable("compte non chargé par signal-cli, redémarre le conteneur signal-cli")
+        raise StoryError(f"signal-cli : {message}")
     return body.get("result")
 
 
@@ -366,13 +378,21 @@ def replay(client, count: int) -> int:
     return 0
 
 
+def run_command(function, *args) -> int:
+    try:
+        return function(*args)
+    except StoryError as error:
+        print(error, file=sys.stderr)
+        return 1
+
+
 def main() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s [%(levelname)s] %(message)s", stream=sys.stdout)
     client = ab.MatrixClient(ab.HOMESERVER_URL, ab.ACCESS_TOKEN, ab.USER_ID)
     if len(sys.argv) == 2 and sys.argv[1] == "--report":
-        sys.exit(report(client))
+        sys.exit(run_command(report, client))
     if len(sys.argv) == 3 and sys.argv[1] == "--replay":
-        sys.exit(replay(client, int(sys.argv[2])))
+        sys.exit(run_command(replay, client, int(sys.argv[2])))
     try:
         client.disable_own_ratelimit()
     except requests.RequestException:
@@ -384,6 +404,7 @@ def main() -> None:
     attempts: dict[str, int] = {}
     unknown_since: dict[str, float] = {}
     retry_at: dict[str, float] = {}
+    warned: dict[str, float] = {}
     status_room = None
     last_scan = None
     log.info("Démarrage")
@@ -410,15 +431,17 @@ def main() -> None:
                         try:
                             rooms = handle(client, event, rooms)
                             done.append(event_id)
-                        except UnknownGroup as error:
+                        except RetryLater as error:
                             first = unknown_since.setdefault(event_id, time.monotonic())
                             if time.monotonic() - first > UNKNOWN_GROUP_WAIT:
                                 log.error("Statut abandonné : %s", error)
                                 done.append(event_id)
                             else:
-                                if event_id not in retry_at:
-                                    log.warning("%s, nouvel essai toutes les %d s", error, UNKNOWN_GROUP_RETRY)
-                                retry_at[event_id] = time.monotonic() + UNKNOWN_GROUP_RETRY
+                                delay = SIGNAL_UNAVAILABLE_RETRY if isinstance(error, SignalUnavailable) else UNKNOWN_GROUP_RETRY
+                                if time.monotonic() - warned.get(str(error), -1e9) > 600:
+                                    log.warning("%s, nouvel essai toutes les %d s", error, delay)
+                                    warned[str(error)] = time.monotonic()
+                                retry_at[event_id] = time.monotonic() + delay
                         except (StoryError, ab.BridgeCommandError, ab.BridgeCommandTimeout, requests.RequestException) as error:
                             attempts[event_id] = attempts.get(event_id, 0) + 1
                             log.error("Statut non publié : %s", error)
