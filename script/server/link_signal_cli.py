@@ -52,8 +52,12 @@ def main():
     args = parser.parse_args()
 
     if args.action == "accounts":
-        for number in accounts(args.url):
+        listed = accounts(args.url)
+        for number in listed:
             print(number)
+        if not listed:
+            print("Aucun compte chargé par signal-cli", file=sys.stderr)
+            sys.exit(3)
     elif args.action == "status":
         numbers = accounts(args.url)
         if numbers:
