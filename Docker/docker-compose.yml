@@ -171,9 +171,11 @@ services:
     container_name: signal-cli
     restart: unless-stopped
     network_mode: host
+    command: ["sh", "/run.sh"]
     volumes:
       - signal_cli_data:/data
       - auto_bridge_state:/state:ro
+      - ./signal-cli/run.sh:/run.sh:ro
 
   auto-status:
     build: ./auto-bridge
